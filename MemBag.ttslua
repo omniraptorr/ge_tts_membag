@@ -1,0 +1,199 @@
+local Instance = require("ge_tts/Instance")
+local TableUtils = require('ge_tts/TableUtils')
+
+
+---@class MemBagInstance : ge_tts__Instance
+
+---@shape MemBag_entry
+---@field pos tts__Vector @ position relative to centerObject
+---@field rot tts__Vector @ local relative to centerObject
+---@field lock boolean
+
+---@alias entries table<string, MemBag_entry>
+
+---@shape MemBag_config
+---@field smoothTake nil | boolean
+---@field flourish nil | boolean
+---@field sequential nil | boolean
+---@field relative nil | boolean
+
+---@type MemBag_config
+local defaultConfig = {
+	smoothTake = true,
+	flourish = true,
+	sequential = false,
+	relative = true,
+}
+
+---@shape MemBagInstance_SavedState : ge_tts__Instance_SavedState
+---@field entries entries
+---@field config nil | MemBag_config
+
+---@class static_MemBagInstance : ge_tts__static_Instance
+---@overload fun(savedState: MemBagInstance_SavedState): CenteredMemBagInstance
+---@overload fun(object: tts__Container): CenteredMemBagInstance
+---@overload fun(object: tts__Container, objects: tts__Object[]): CenteredMemBagInstance
+---@overload fun(object: tts__Container, objects: nil | tts__Object[], config: MemBag_config): CenteredMemBagInstance
+local MemBagInstance = {}
+
+MemBagInstance.INSTANCE_TYPE = "MemBag"
+
+setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
+	---@param objOrSavedState tts__Container | CenteredMemBagInstance_SavedState
+	---@param nilOrEntries nil | entries
+	---@param nilOrConfig nil | MemBag_config
+	__call = function(objOrSavedState, nilOrEntries, nilOrConfig)
+		local self = --[[---@type MemBagInstance]] Instance(objOrSavedState)
+		---@type entries
+		local entries
+		local isSavedState = MemBagInstance.isSavedState(objOrSavedState)
+
+		if isSavedState then
+			entries = (--[[---@type MemBagInstance_SavedState]] objOrSavedState).entries
+		elseif nilOrEntries then
+			entries = --[[---@type entries ]] nilOrEntries
+		else
+			entries = {}
+		end
+
+		---@type MemBag_config
+		local config = nilOrConfig and TableUtils.merge(defaultConfig, nilOrConfig) or {}
+
+		---@return string
+		function self.getInstanceType()
+			return MemBagInstance.INSTANCE_TYPE
+		end
+
+		local superGetObject = self.getObject()
+		---@return tts__Container
+		function self.getObject()
+			return superGetObject()
+		end
+
+		---@return entries
+		function self.getEntries()
+			return TableUtils.copy(entries, true)
+		end
+
+		local superSave = self.save
+		-- Then, we replace this method with our own implementation...
+
+		---@return MemBagInstance_SavedState
+		function self.save()
+			-- ge_tts__Instance (our super class) has its own data that it needs to save. So we call
+			-- through to the original (super) save() method, and merge its result with our own data
+			-- i.e. our object entries
+			return --[[---@type MemBagInstance_SavedState]] TableUtils.merge(superSave(), {
+				entries = entries,
+			})
+		end
+
+		---@param guid string
+		---@return ge_tts__Instance
+		function self.getEntryInstance(guid)
+			local existingInstance = Instance.getInstance(guid)
+			if existingInstance then
+				return --[[---@not nil]] existingInstance
+			end
+
+			local realObj = self.getObject()
+			local entryState, _ = TableUtils.detect(realObj.getObjects(), function(objectState)
+				return objectState.guid == guid
+			end)
+			local entryObj = getObjectFromGUID(guid)
+			assert(not (entryState and entryObj), "objects with guid" .. guid .. " exist both in and out of self!")
+			assert(not entryState and not entryObj, "object with guid " .. guid .. "not found!")
+			if entryState then
+				return Instance(guid, realObj)
+			elseif entryObj then
+				return Instance(--[[---@not nil]] entryObj)
+			end
+		end
+
+
+		---@param pos tts__Vector
+		---@param nilOrFlourish nil | boolean
+		---@return tts__Vector
+		---@overload fun(entry: MemBag_entry): tts__Vector
+		function self.realPosition(pos, nilOrFlourish)
+			---@type nil | boolean
+			local flourish
+			if nilOrFlourish == nil then
+				flourish = config.flourish
+			end
+
+			local realObj = self.getObject()
+			if config.relative then
+				if flourish then
+					return realObj.positionToWorld(pos) + Vector(0, 1, 0)
+				else
+					realObj.positionToWorld(pos)
+				end
+			else
+				if flourish then
+					return pos + Vector(0, 1, 0)
+				else
+					return pos
+				end
+			end
+		end
+
+		---@param rot tts__Vector
+		function self.realRotation(rot)
+			return config.relative and (self.getObject().getRotation() + rot) or rot
+		end
+
+		---@param guid string
+		---@param nilOrFlourish nil | boolean
+		---@param nilOrSmoothTake nil | boolean
+		---@return ge_tts__Instance
+		function self.placeEntry(guid, nilOrSmoothTake, nilOrFlourish)
+			-- todo: man handling default args is awkward. ask for feedback on style
+			---@type nil | boolean
+			local smoothTake
+			if nilOrSmoothTake == nil then
+				smoothTake = config.smoothTake
+			end
+
+			---@type nil | boolean
+			local flourish
+			if nilOrFlourish == nil then
+				flourish = config.flourish
+			end
+
+			local params = {
+				guid = guid,
+				position = self.realPosition(entries[guid].pos, flourish),
+				rotation = self.realRotation(entries[guid].rot),
+				smooth = smoothTake,
+			}
+
+			local entryInstance = self.getEntryInstance(guid)
+			-- todo: handle the issue where existing instance obj can get sucked into hands
+			entryInstance.takeObject(--[[---@type ge_tts__Instance_TakeObjectOptions]] params)
+			return entryInstance
+		end
+
+
+		---@param nilOrSmoothTake nil | boolean
+		---@param nilOrFlourish nil | boolean
+		function self.placeAll(nilOrSmoothTake, nilOrFlourish)
+			---@type nil | boolean
+			local smoothTake
+			if nilOrSmoothTake == nil then
+				smoothTake = config.smoothTake
+			end
+
+			---@type nil | boolean
+			local flourish
+			if nilOrFlourish == nil then
+				flourish = config.flourish
+			end
+
+			TableUtils.map(entries, function(_, guid)
+				return self.placeEntry(guid, smoothTake, flourish)
+			end)
+		end
+	end,
+	__index = Instance,
+}))

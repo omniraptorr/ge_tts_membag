@@ -1,0 +1,49 @@
+local Instance = require("ge_tts/Instance")
+local TableUtils = require('ge_tts/TableUtils')
+
+--- the coords in entries here aren't your mommy's coords they're relative to the center. center coords still respect relative/absolute tho
+---@class CenteredMemBagInstance : ge_tts__Instance
+
+---@shape centerBand
+---@field pos tts__VectorShape
+---@field rot tts__VectorShape
+---@field left nil | number
+---@field right nil | number
+
+---if there is no center in the constructor, center is computed at runtime from average coords
+---@shape CenteredMemBagInstance_SavedState : MemBagInstance_SavedState
+---@field center centerBand
+---@field flipped boolean
+
+---@class static_CenteredMemBagInstance : ge_tts__static_Instance
+---@overload fun(savedState: CenteredMemBagInstance_SavedState): CenteredMemBagInstance
+---@overload fun(object: tts__Object): CenteredMemBagInstance
+---@overload fun(object: tts__Object, objects: tts__Object[]): CenteredMemBagInstance
+---@overload fun(object: tts__Object, objects: tts__Object[], center: centerBand): CenteredMemBagInstance
+---@overload fun(object: tts__Object, objects: tts__Object[], center: tts__Object): CenteredMemBagInstance
+local MemBagInstance = {}
+
+MemBagInstance.INSTANCE_TYPE = "MemBag"
+
+setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
+	---@param objOrSavedState tts__Object | CenteredMemBagInstance_SavedState
+	---@param nilOrEntries nil | MemBag_entry[]
+	---@param nilOrCenter nil | centerBand | tts__Object
+	__call = function(objOrSavedState, nilOrEntries, nilOrCenter)
+		local isSavedState = MemBagInstance.isSavedState(objOrSavedState)
+		local self = Instance(objOrSavedState)
+		if isSavedState then
+			-- If we're restoring from a saved state, we restore the card data from the saved state.
+
+			local data = --[[---@type CenteredMemBagInstance_SavedState]] objOrSavedState
+			card = data.cardb
+		else
+			-- If not, then we know this constructor was called with the necessary card data, thus
+			-- we cast it: --[[---@type Card]]
+			card = --[[---@type Card]] cardOrSavedState
+			-- Again, this cast business is just for the Luanalysis IDE, if you just want to use
+			-- Atom and don't care about static typing your code, you can omit these comments.
+		end
+	end,
+	__index = Instance,
+}))

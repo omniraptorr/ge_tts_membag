@@ -1,33 +1,35 @@
+local Coroutine = require("ge_tts/Coroutine")
 local Instance = require("ge_tts/Instance")
 local TableUtils = require('ge_tts/TableUtils')
-
+local EventManager = require("ge_tts/EventManager")
 
 ---@class MemBagInstance : ge_tts__Instance
 
 ---@shape MemBag_entry
 ---@field pos tts__Vector @ position relative to centerObject
 ---@field rot tts__Vector @ local relative to centerObject
----@field lock boolean
+---@field lock nil | boolean
 
 ---@alias entries table<string, MemBag_entry>
 
 ---@shape MemBag_config
 ---@field smoothTake nil | boolean
----@field flourish nil | boolean
----@field sequential nil | boolean
+---@field lift nil | number
+---@field delay nil | number
 ---@field relative nil | boolean
 
 ---@type MemBag_config
 local defaultConfig = {
 	smoothTake = true,
-	flourish = true,
-	sequential = false,
+	lift = 1,
+	delay = 0.4,
 	relative = true,
 }
+local configMeta = {__index = defaultConfig}
 
 ---@shape MemBagInstance_SavedState : ge_tts__Instance_SavedState
 ---@field entries entries
----@field config nil | MemBag_config
+---@field config MemBag_config
 
 ---@class static_MemBagInstance : ge_tts__static_Instance
 ---@overload fun(savedState: MemBagInstance_SavedState): CenteredMemBagInstance
@@ -38,41 +40,74 @@ local MemBagInstance = {}
 
 MemBagInstance.INSTANCE_TYPE = "MemBag"
 
+---Each object may only ever be a child of one membag. It also may not go into any bags except its designated parent.
+---To enforce this we copy each membag entry into one big table to avoid collisions and to check against it when filtering.
+---@type table<string, ge_tts__Instance>
+local allEntries = {}
+
+
+---collision checking happens here
+---@param guid string
+---@param instance MemBagInstance
+local function addToAllEntries(guid, instance)
+	if allEntries[guid] and allEntries[guid] ~= instance then
+		error("instance " .. instance.getInstanceGuid() .. "tried to add duplicate entry for obj " .. guid ..
+		"but it already belongs to instance " .. allEntries[guid].getInstanceGuid())
+	end
+
+	allEntries[guid] = instance
+end
+
+--- this is the filtering part (children can only ever go into their own parents)
+---@param container tts__Object
+---@param obj tts__Object
+local function filterMemBagChild(container, obj)
+	local parent = allEntries[obj.getGUID()]
+	--- for a membag child to enter a container it must have a parent and the container must be its parent.
+	if parent and Instance.getInstance(container.getGUID()) == parent then
+		return true
+	end
+end
+
+EventManager.addHandler("filterObjectEnterContainer", filterMemBagChild)
+
 setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
 	---@param objOrSavedState tts__Container | CenteredMemBagInstance_SavedState
 	---@param nilOrEntries nil | entries
 	---@param nilOrConfig nil | MemBag_config
 	__call = function(objOrSavedState, nilOrEntries, nilOrConfig)
-		local self = --[[---@type MemBagInstance]] Instance(objOrSavedState)
+		local self = --[[---@type MemBagInstance]] Instance(objOrSavedState) -- super constructor
+
 		---@type entries
 		local entries
-		local isSavedState = MemBagInstance.isSavedState(objOrSavedState)
-
-		if isSavedState then
-			entries = (--[[---@type MemBagInstance_SavedState]] objOrSavedState).entries
-		elseif nilOrEntries then
-			entries = --[[---@type entries ]] nilOrEntries
-		else
-			entries = {}
-		end
-
 		---@type MemBag_config
-		local config = nilOrConfig and TableUtils.merge(defaultConfig, nilOrConfig) or {}
+		local config
 
-		---@return string
-		function self.getInstanceType()
-			return MemBagInstance.INSTANCE_TYPE
+		---@param entry MemBag_entry
+		---@param guid string
+		---@return MemBag_entry
+		local function entryMapFunc(entry, guid)
+			return self.addEntry(guid, entry)
 		end
 
-		local superGetObject = self.getObject()
-		---@return tts__Container
-		function self.getObject()
-			return superGetObject()
-		end
+		local isSavedState = MemBagInstance.isSavedState(objOrSavedState)
+		if isSavedState then
+			local savedState = --[[---@type MemBagInstance_SavedState]] objOrSavedState
 
-		---@return entries
-		function self.getEntries()
-			return TableUtils.copy(entries, true)
+			config = setmetatable(savedState.config, configMeta)
+			TableUtils.map(savedState.entries, entryMapFunc)
+		else
+			if nilOrEntries then
+				TableUtils.map(--[[---@not nil]] nilOrEntries, entryMapFunc)
+			else
+				entries = {}
+			end
+
+			if nilOrConfig then
+				config = setmetatable(TableUtils.copy(config), configMeta)
+			else
+				config = setmetatable({}, configMeta)
+			end
 		end
 
 		local superSave = self.save
@@ -84,57 +119,93 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
 			-- through to the original (super) save() method, and merge its result with our own data
 			-- i.e. our object entries
 			return --[[---@type MemBagInstance_SavedState]] TableUtils.merge(superSave(), {
+				config = config,
 				entries = entries,
 			})
 		end
 
-		---@param guid string
-		---@return ge_tts__Instance
-		function self.getEntryInstance(guid)
-			local existingInstance = Instance.getInstance(guid)
-			if existingInstance then
-				return --[[---@not nil]] existingInstance
-			end
+		---@return string
+		function self.getInstanceType()
+			return MemBagInstance.INSTANCE_TYPE
+		end
 
-			local realObj = self.getObject()
-			local entryState, _ = TableUtils.detect(realObj.getObjects(), function(objectState)
+		local superGetObject = self.getObject
+		---This overload is really just for Luanalysis, i didn't feel like casting to container every time
+		---@return tts__Container
+		function self.getObject()
+			return superGetObject()
+		end
+
+		---Fetches existing entry instance
+		---@param guid string
+		---@return nil | MemBag_entry
+		function self.getEntry(guid)
+			return TableUtils.copy(entries[guid], true)
+		end
+
+		---@return entries
+		function self.getEntries()
+			return TableUtils.copy(entries, true)
+		end
+
+
+		---Looks inside and outside self for matching object and makes an Instance for it, then adds it to entries.
+		---Errors if matching object does not exist either directly in the scene or inside selfObj
+		---@param guid string
+		---@param nilOrData nil | MemBag_entry
+		---@return MemBag_entry
+		---@overload fun(guid: string): ge_tts__Instance
+		function self.addEntry(guid, nilOrData)
+			assert(not entries[guid], "entry with guid " .. guid .. " already exists!")
+			local selfObj = self.getObject()
+			local containedObjState, _ = TableUtils.detect(selfObj.getObjects(), function(objectState)
 				return objectState.guid == guid
 			end)
-			local entryObj = getObjectFromGUID(guid)
-			assert(not (entryState and entryObj), "objects with guid" .. guid .. " exist both in and out of self!")
-			assert(not entryState and not entryObj, "object with guid " .. guid .. "not found!")
-			if entryState then
-				return Instance(guid, realObj)
-			elseif entryObj then
-				return Instance(--[[---@not nil]] entryObj)
+
+			local entryObj = --[[---@not nil]] getObjectFromGUID(guid) -- if it is nil, that should be caught by the assert on the next line
+			assert(containedObjState or entryObj, "object with guid " .. guid .. "not found!")
+			assert(not (containedObjState and entryObj), "objects with guid" .. guid .. " exist both in and out of self!")
+
+			addToAllEntries(guid, self)
+
+			if containedObjState then
+				entryObj = selfObj
 			end
+
+			if nilOrData then
+				entries[guid] = --[[---@not nil]] TableUtils.copy(nilOrData)
+			else
+				entries[guid] = {
+					pos = entryObj.getPosition(),
+					rot = entryObj.getRotation(),
+					lock = entryObj.getLock()
+				}
+			end
+
+			return entries[guid]
+		end
+
+		---@param guid string
+		function self.removeEntry(guid)
+			entries[guid] = nil
+			allEntries[guid] = nil
+		end
+
+		function self.removeAllEntries()
+			TableUtils.map(TableUtils.copy(entries), function(_, guid)
+				return self.removeEntry(guid)
+			end)
 		end
 
 
 		---@param pos tts__Vector
-		---@param nilOrFlourish nil | boolean
 		---@return tts__Vector
 		---@overload fun(entry: MemBag_entry): tts__Vector
-		function self.realPosition(pos, nilOrFlourish)
-			---@type nil | boolean
-			local flourish
-			if nilOrFlourish == nil then
-				flourish = config.flourish
-			end
-
-			local realObj = self.getObject()
+		function self.realPosition(pos)
 			if config.relative then
-				if flourish then
-					return realObj.positionToWorld(pos) + Vector(0, 1, 0)
-				else
-					realObj.positionToWorld(pos)
-				end
+				return self.getObject().positionToWorld(pos)
 			else
-				if flourish then
-					return pos + Vector(0, 1, 0)
-				else
-					return pos
-				end
+				return pos
 			end
 		end
 
@@ -144,56 +215,111 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
 		end
 
 		---@param guid string
-		---@param nilOrFlourish nil | boolean
 		---@param nilOrSmoothTake nil | boolean
 		---@return ge_tts__Instance
-		function self.placeEntry(guid, nilOrSmoothTake, nilOrFlourish)
+		function self.placeEntry(guid, nilOrSmoothTake)
 			-- todo: man handling default args is awkward. ask for feedback on style
 			---@type nil | boolean
 			local smoothTake
 			if nilOrSmoothTake == nil then
 				smoothTake = config.smoothTake
-			end
-
-			---@type nil | boolean
-			local flourish
-			if nilOrFlourish == nil then
-				flourish = config.flourish
+			else
+				smoothTake = nilOrSmoothTake
 			end
 
 			local params = {
 				guid = guid,
-				position = self.realPosition(entries[guid].pos, flourish),
+				position = self.realPosition(entries[guid].pos),
 				rotation = self.realRotation(entries[guid].rot),
 				smooth = smoothTake,
 			}
+			if entries[guid].lock ~= nil then
+				params.callback = function(obj)
+					obj.setLock(entries[guid].lock)
+				end
+			end
 
-			local entryInstance = self.getEntryInstance(guid)
+			local entryInstance = self.addEntry(guid)
 			-- todo: handle the issue where existing instance obj can get sucked into hands
 			entryInstance.takeObject(--[[---@type ge_tts__Instance_TakeObjectOptions]] params)
 			return entryInstance
 		end
 
+		---@param guid string
+		---@param nilOrDelay nil | number
+		function self.recallEntry(guid, nilOrDelay)
+
+			---@type nil | number
+			local delay
+			if nilOrDelay == nil then
+				delay = config.delay
+			end
+
+			local entryInstance = --[[---@not nil]] Instance.getInstance(guid)
+			assert(entryInstance, "recallEntry(): Instance does not exist!")
+			local entryObj = entryInstance.getObject()
+			local selfObj = self.getObject()
+
+			if entryObj == selfObj then -- it's already in!
+				return
+			end
+
+			entryInstance.takeObject({
+				smooth = true,
+				position = entryObj.getPosition() + Vector(0,1,0),
+				--todo: make callback local
+				callback = function(obj)
+					selfObj.putObject(obj)
+				end,
+			})
+			if delay then
+				Coroutine.yieldSeconds(--[[---@not nil]] delay)
+			end
+		end
+
+		---@param guid string
+		---@param nilOrHeight nil | boolean
+		---@param nilOrDelay nil | number
+		function self.liftEntry(guid, nilOrHeight, nilOrDelay)
+
+		end
+
+
+
 
 		---@param nilOrSmoothTake nil | boolean
-		---@param nilOrFlourish nil | boolean
-		function self.placeAll(nilOrSmoothTake, nilOrFlourish)
+		---@param nilOrDelay nil | number
+		---@overload fun()
+		function self.placeAll(nilOrSmoothTake, nilOrDelay)
 			---@type nil | boolean
 			local smoothTake
 			if nilOrSmoothTake == nil then
 				smoothTake = config.smoothTake
+			else
+				smoothTake = nilOrSmoothTake
 			end
 
-			---@type nil | boolean
-			local flourish
-			if nilOrFlourish == nil then
-				flourish = config.flourish
+			---@type nil | number @ delay is passed on to individual funcs
+			local delay
+			if nilOrDelay == nil then
+				delay = config.delay
 			end
 
-			TableUtils.map(entries, function(_, guid)
-				return self.placeEntry(guid, smoothTake, flourish)
-			end)
+			--if delay then
+			--	TableUtils.map(entries, function(_, guid)
+			--		local out = self.placeEntry(guid, smoothTake)
+			--		Coroutine.yieldSeconds(--[[---@not nil]] delay)
+			--		return out
+			--	end)
+			--else
+			--	TableUtils.map(entries, function(_, guid)
+			--		return self.placeEntry(guid, smoothTake)
+			--	end)
+			--end
 		end
+
+		self.invalidateSavedState()
+		return self
 	end,
 	__index = Instance,
 }))

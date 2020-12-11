@@ -63,12 +63,13 @@ end
 ---@param obj tts__Object
 local function filterMemBagChild(container, obj)
 	local parent = allEntries[obj.getGUID()]
-	--- for a membag child to enter a container it must have a parent and the container must be its parent.
-	if parent and Instance.getInstance(container.getGUID()) == parent then
-		return true
+	--- for a MemBag child to enter a container it must have a parent and the container must be its parent.
+	if parent and parent.getInstanceGuid() ~= container.getGUID() then
+		return false
 	end
-end
 
+	return true
+end
 EventManager.addHandler("filterObjectEnterContainer", filterMemBagChild)
 
 setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {

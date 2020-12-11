@@ -1,4 +1,5 @@
 local Coroutine = require("ge_tts/Coroutine")
+local Logger = require("ge_tts/Logger")
 local Instance = require("ge_tts/Instance")
 local TableUtils = require('ge_tts/TableUtils')
 local EventManager = require("ge_tts/EventManager")
@@ -6,9 +7,11 @@ local EventManager = require("ge_tts/EventManager")
 ---@class MemBagInstance : ge_tts__Instance
 
 ---@shape MemBag_entry
----@field pos tts__Vector @ position relative to centerObject
----@field rot tts__Vector @ local relative to centerObject
+---@field pos tts__Vector
+---@field rot tts__Vector
 ---@field lock nil | boolean
+---@field parent nil | string
+---@field currentParent nil | string
 
 ---@alias entries table<string, MemBag_entry>
 
@@ -16,14 +19,12 @@ local EventManager = require("ge_tts/EventManager")
 ---@field smoothTake nil | boolean
 ---@field lift nil | number
 ---@field delay nil | number
----@field relative nil | boolean
 
 ---@type MemBag_config
 local defaultConfig = {
 	smoothTake = true,
 	lift = 1,
 	delay = 0.4,
-	relative = true,
 }
 local configMeta = {__index = defaultConfig}
 
@@ -38,11 +39,11 @@ local configMeta = {__index = defaultConfig}
 ---@overload fun(object: tts__Container, objects: nil | tts__Object[], config: MemBag_config): CenteredMemBagInstance
 local MemBagInstance = {}
 
-MemBagInstance.INSTANCE_TYPE = "MemBag"
+MemBagInstance.INSTANCE_TYPE = "Absolute MemBag"
 
----Each object may only ever be a child of one membag. It also may not go into any bags except its designated parent.
----To enforce this we copy each membag entry into one big table to avoid collisions and to check against it when filtering.
----@type table<string, ge_tts__Instance>
+---Each object may only ever be a child of one MemBag. It also may not go into any bags except its designated parent.
+---To enforce this we copy each MemBag entry into one big table to avoid collisions and to check against it when filtering.
+---@type table<string, MemBagInstance>
 local allEntries = {}
 
 
@@ -50,26 +51,39 @@ local allEntries = {}
 ---@param guid string
 ---@param instance MemBagInstance
 local function addToAllEntries(guid, instance)
-	if allEntries[guid] and allEntries[guid] ~= instance then
-		error("instance " .. instance.getInstanceGuid() .. "tried to add duplicate entry for obj " .. guid ..
+	Logger.assert(allEntries[guid] and allEntries[guid] ~= instance,
+"instance " .. instance.getInstanceGuid() .. "tried to add duplicate entry for obj " .. guid ..
 		"but it already belongs to instance " .. allEntries[guid].getInstanceGuid())
-	end
 
 	allEntries[guid] = instance
 end
 
---- this is the filtering part (children can only ever go into their own parents)
+local globalPlaceCallback_name = "__MemBagPlaceCallback"
+local function MemBagPlaceCallback(obj)
+	return allEntries[obj.getGUID()].entryPlaceCallback(obj)
+end
+Global.setVar(globalPlaceCallback_name, MemBagPlaceCallback)
+
+---@param container tts__Object
+---@param obj tts__Object
+local function onObjectEnterContainer(container, obj)
+	local guid = obj.getGUID()
+	local realParent = allEntries[guid]
+	if realParent then
+		realParent.setParent(container)
+	end
+end
+
+---@alias filterCallback fun(container: tts__Object, obj: tts__Object, result:any): boolean
+
+--- this is the filtering part (always ask parent for permission before going anywhere)
 ---@param container tts__Object
 ---@param obj tts__Object
 local function filterMemBagChild(container, obj)
 	local parent = allEntries[obj.getGUID()]
-	--- for a MemBag child to enter a container it must have a parent and the container must be its parent.
-	if parent and parent.getInstanceGuid() ~= container.getGUID() then
-		return false
-	end
-
-	return true
+	return parent and parent.filterObject(container, obj)
 end
+
 EventManager.addHandler("filterObjectEnterContainer", filterMemBagChild)
 
 setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
@@ -145,44 +159,85 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
 		end
 
 		---@return entries
-		function self.getEntries()
+		function self.getAllEntries()
 			return TableUtils.copy(entries, true)
 		end
 
+		---This is basically ripped from Instance.takeObject()
+		---@param guid string
+		---@return tts__IndexedSimpleObjectState | tts__Object
+		function self.findEntry(guid)
+			---@type tts__Container
+			local parent
+
+			local parentGUID = entries[guid].parent
+			if parentGUID then
+				parent = --[[---@type tts__Container]] getObjectFromGUID(--[[---@not nil]] parentGUID) -- jeez
+				if parent == nil then
+					error(string.format("MemBag %s: parent %s of entry %s doesn't exist", self.getInstanceGuid(), parentGUID, guid))
+				end
+				Logger.assert(parent.getObjects, "parent is not container wtf")
+			end
+
+			local nilOrState, _ = TableUtils.detect(parent.getObjects(), function(objectState)
+				return objectState.guid == guid
+			end)
+			local nilOrObj = getObjectFromGUID(guid)
+
+			Logger.assert(nilOrState or nilOrObj, "object with guid " .. guid .. "not found!")
+			Logger.assert(not (nilOrState and nilOrObj), "objects with guid" .. guid .. " exist both in and out of parent!")
+
+			return --[[---@not nil]] nilOrState or --[[---@not nil]] nilOrObj
+		end
+
+		---Straightforward but meant to be overridden
+		---@param pos tts__CharVectorShape
+		---@param rot tts__CharVectorShape
+		---@return tts__Vector, tts__Vector
+		function self.getTransform(pos, rot)
+			return Vector(pos), Vector(rot)
+		end
+
+		---@param entry MemBag_entry
+		---@return tts__Vector, tts__Vector
+		function self.applyTransform(entry)
+			return entry.pos, entry.rot
+		end
 
 		---Looks inside and outside self for matching object and makes an Instance for it, then adds it to entries.
-		---Errors if matching object does not exist either directly in the scene or inside selfObj
+		---Errors if matching object does not exist either directly in the scene or inside selfObj.
 		---@param guid string
 		---@param nilOrData nil | MemBag_entry
 		---@return MemBag_entry
 		---@overload fun(guid: string): ge_tts__Instance
 		function self.addEntry(guid, nilOrData)
-			assert(not entries[guid], "entry with guid " .. guid .. " already exists!")
-			local selfObj = self.getObject()
-			local containedObjState, _ = TableUtils.detect(selfObj.getObjects(), function(objectState)
-				return objectState.guid == guid
-			end)
-
-			local entryObj = --[[---@not nil]] getObjectFromGUID(guid) -- if it is nil, that should be caught by the assert on the next line
-			assert(containedObjState or entryObj, "object with guid " .. guid .. "not found!")
-			assert(not (containedObjState and entryObj), "objects with guid" .. guid .. " exist both in and out of self!")
-
 			addToAllEntries(guid, self)
 
-			if containedObjState then
-				entryObj = selfObj
+			---@type tts__Object
+			local entryObj
+
+			---@type tts__Object | tts__IndexedSimpleObjectState
+			local foundEntry = self.findEntry(guid)
+			if type(foundEntry == "table") then
+				entryObj = self.getObject()
+			else -- it's an object
+				entryObj = --[[---@type tts__Object]] foundEntry
 			end
 
 			if nilOrData then
+
 				entries[guid] = --[[---@not nil]] TableUtils.copy(nilOrData)
 			else
+				local pos, rot = self.getTransform(entryObj.getPosition(), entryObj.getRotation())
+
 				entries[guid] = {
-					pos = entryObj.getPosition(),
-					rot = entryObj.getRotation(),
+					pos = pos,
+					rot = rot,
 					lock = entryObj.getLock()
 				}
 			end
 
+			self.invalidateSavedState()
 			return entries[guid]
 		end
 
@@ -190,60 +245,73 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
 		function self.removeEntry(guid)
 			entries[guid] = nil
 			allEntries[guid] = nil
+			self.invalidateSavedState()
 		end
 
 		function self.removeAllEntries()
 			TableUtils.map(TableUtils.copy(entries), function(_, guid)
 				return self.removeEntry(guid)
 			end)
+			self.invalidateSavedState()
 		end
 
 
-		---@param pos tts__Vector
-		---@return tts__Vector
-		---@overload fun(entry: MemBag_entry): tts__Vector
-		function self.realPosition(pos)
-			if config.relative then
-				return self.getObject().positionToWorld(pos)
-			else
-				return pos
-			end
-		end
-
-		---@param rot tts__Vector
-		function self.realRotation(rot)
-			return config.relative and (self.getObject().getRotation() + rot) or rot
+		---@param obj tts__Object
+		function self.entryPlaceCallback(obj)
+			local lock = entries[obj.getGUID()].lock or false
+			obj.setLock(lock)
 		end
 
 		---@param guid string
 		---@param nilOrSmoothTake nil | boolean
-		---@return ge_tts__Instance
 		function self.placeEntry(guid, nilOrSmoothTake)
-			-- todo: man handling default args is awkward. ask for feedback on style
-			---@type nil | boolean
-			local smoothTake
-			if nilOrSmoothTake == nil then
-				smoothTake = config.smoothTake
-			else
-				smoothTake = nilOrSmoothTake
-			end
+			Logger.assert(entries[guid], "no entry with guid " .. guid)
+			local entry = entries[guid]
 
-			local params = {
-				guid = guid,
-				position = self.realPosition(entries[guid].pos),
-				rotation = self.realRotation(entries[guid].rot),
-				smooth = smoothTake,
-			}
-			if entries[guid].lock ~= nil then
-				params.callback = function(obj)
-					obj.setLock(entries[guid].lock)
+			-- todo: man handling default args is awkward. ask for feedback on style
+			local smoothTake = (nilOrSmoothTake == nil) and config.smoothTake or nilOrSmoothTake
+
+			local foundEntry = self.findEntry(guid)
+
+			local pos, rot = self.getTransform(guid)
+
+			if type(foundEntry == "table") then
+				---@type tts__Object_GuidTakeObjectParameters
+				local params = {
+					guid = guid,
+					position = entry.pos,
+					rotation = entry.rot,
+					smooth = smoothTake,
+					callback = globalPlaceCallback_name,
+				}
+				self.getObject().takeObject(params)
+			else -- it's an object
+				local entryObj = --[[---@type tts__Object]] foundEntry
+				if smoothTake then
+
+				else
+					entryObj.setPosition(entry.pos)
+					entryObj.setRotation(entry.rot)
 				end
 			end
 
-			local entryInstance = self.addEntry(guid)
+
+			local entryObj = getObjectFromGUID(guid)
+
 			-- todo: handle the issue where existing instance obj can get sucked into hands
 			entryInstance.takeObject(--[[---@type ge_tts__Instance_TakeObjectOptions]] params)
 			return entryInstance
+		end
+
+		---by default we only let children go into the parent bag
+		---@param container tts__Object
+		---@param obj tts__Object
+		function self.filterObject(container, obj)
+			--local entry = entries[obj.getGUID()] -- how to reference child's entry. we don't need it here tho
+
+			if container == self.getObject() then
+				return true
+			end
 		end
 
 		---@param guid string
@@ -257,7 +325,7 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
 			end
 
 			local entryInstance = --[[---@not nil]] Instance.getInstance(guid)
-			assert(entryInstance, "recallEntry(): Instance does not exist!")
+			Logger.assert(entryInstance, "recallEntry(): Instance does not exist!")
 			local entryObj = entryInstance.getObject()
 			local selfObj = self.getObject()
 
@@ -319,7 +387,6 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
 			--end
 		end
 
-		self.invalidateSavedState()
 		return self
 	end,
 	__index = Instance,

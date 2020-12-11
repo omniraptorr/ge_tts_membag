@@ -1,0 +1,222 @@
+local Coroutine = require("ge_tts/Coroutine")
+local Instance = require("ge_tts/Instance")
+local TableUtils = require('ge_tts/TableUtils')
+local EventManager = require("ge_tts/EventManager")
+
+---@class RelativeMemBagInstance : MemBagInstance
+
+---@shape RelativeMemBagInstance_SavedState : MemBagInstance_SavedState
+---@field relative true
+
+---@class static_RelativeMemBagInstance : static_MemBagInstance
+---@overload fun(savedState: MemBagInstance_SavedState): CenteredMemBagInstance
+---@overload fun(object: tts__Container): CenteredMemBagInstance
+---@overload fun(object: tts__Container, objects: tts__Object[]): CenteredMemBagInstance
+---@overload fun(object: tts__Container, objects: nil | tts__Object[], config: MemBag_config): CenteredMemBagInstance
+local RelativeMemBagInstance = {}
+
+RelativeMemBagInstance.INSTANCE_TYPE = "Relative MemBag"
+
+---Each object may only ever be a child of one membag. It also may not go into any bags except its designated parent.
+---To enforce this we copy each membag entry into one big table to avoid collisions and to check against it when filtering.
+---@type table<string, ge_tts__Instance>
+local allEntries = {}
+
+
+---collision checking happens here
+---@param guid string
+---@param instance MemBagInstance
+local function addToAllEntries(guid, instance)
+	if allEntries[guid] and allEntries[guid] ~= instance then
+		error("instance " .. instance.getInstanceGuid() .. "tried to add duplicate entry for obj " .. guid ..
+				"but it already belongs to instance " .. allEntries[guid].getInstanceGuid())
+	end
+
+	allEntries[guid] = instance
+end
+
+--- this is the filtering part (children can only ever go into their own parents)
+---@param container tts__Object
+---@param obj tts__Object
+local function filterMemBagChild(container, obj)
+	local parent = allEntries[obj.getGUID()]
+	--- for a MemBag child to enter a container it must have a parent and the container must be its parent.
+	if parent and parent.getInstanceGuid() ~= container.getGUID() then
+		return false
+	end
+
+	return true
+end
+EventManager.addHandler("filterObjectEnterContainer", filterMemBagChild)
+
+setmetatable(RelativeMemBagInstance, TableUtils.merge(getmetatable(Instance), {
+	---@param objOrSavedState tts__Container | CenteredMemBagInstance_SavedState
+	---@param nilOrEntries nil | entries
+	---@param nilOrConfig nil | MemBag_config
+	__call = function(objOrSavedState, nilOrEntries, nilOrConfig)
+		local self = --[[---@type MemBagInstance]] Instance(objOrSavedState) -- super constructor
+
+		---@type entries
+		local entries
+		---@type MemBag_config
+		local config
+
+		---@param entry MemBag_entry
+		---@param guid string
+		---@return MemBag_entry
+		local function entryMapFunc(entry, guid)
+			return self.addEntry(guid, entry)
+		end
+
+		-- todo: override isSavedState
+		local isSavedState = RelativeMemBagInstance.isSavedState(objOrSavedState)
+		if isSavedState then
+			local savedState = --[[---@type MemBagInstance_SavedState]] objOrSavedState
+
+			config = setmetatable(savedState.config, configMeta)
+			TableUtils.map(savedState.entries, entryMapFunc)
+		else
+			if nilOrEntries then
+				TableUtils.map(--[[---@not nil]] nilOrEntries, entryMapFunc)
+			else
+				entries = {}
+			end
+
+			if nilOrConfig then
+				config = setmetatable(TableUtils.copy(config), configMeta)
+			else
+				config = setmetatable({}, configMeta)
+			end
+		end
+
+		local superSave = self.save
+		---@return RelativeMemBagInstance_SavedState
+		function self.save()
+			return --[[---@type RelativeMemBagInstance_SavedState]] TableUtils.merge(superSave(), {
+				relative = true,
+			})
+		end
+
+		---@return string
+		function self.getInstanceType()
+			return RelativeMemBagInstance.INSTANCE_TYPE
+		end
+
+		---@param obj tts__Object
+		function self.getTransform(obj)
+			local realObj = self.getObject()
+
+			return realObj.positionToLocal(obj.getPosition()), obj.getRotation() - realObj.getRotation()
+		end
+
+		---@param guid string
+		---@param nilOrSmoothTake nil | boolean
+		---@return ge_tts__Instance
+		function self.placeEntry(guid, nilOrSmoothTake)
+			-- todo: man handling default args is awkward. ask for feedback on style
+			---@type nil | boolean
+			local smoothTake
+			if nilOrSmoothTake == nil then
+				smoothTake = config.smoothTake
+			else
+				smoothTake = nilOrSmoothTake
+			end
+
+
+			local params = {
+				guid = guid,
+				position = self.realPosition(entries[guid].pos),
+				rotation = self.realRotation(entries[guid].rot),
+				smooth = smoothTake,
+			}
+			if entries[guid].lock ~= nil then
+				params.callback = function(obj)
+					obj.setLock(entries[guid].lock)
+				end
+			end
+
+			local entryObj = getObjectFromGUID(guid)
+
+			-- todo: handle the issue where existing instance obj can get sucked into hands
+			entryInstance.takeObject(--[[---@type ge_tts__Instance_TakeObjectOptions]] params)
+			return entryInstance
+		end
+
+		---@param guid string
+		---@param nilOrDelay nil | number
+		function self.recallEntry(guid, nilOrDelay)
+
+			---@type nil | number
+			local delay
+			if nilOrDelay == nil then
+				delay = config.delay
+			end
+
+			local entryInstance = --[[---@not nil]] Instance.getInstance(guid)
+			assert(entryInstance, "recallEntry(): Instance does not exist!")
+			local entryObj = entryInstance.getObject()
+			local selfObj = self.getObject()
+
+			if entryObj == selfObj then -- it's already in!
+				return
+			end
+
+			entryInstance.takeObject({
+				smooth = true,
+				position = entryObj.getPosition() + Vector(0,1,0),
+				--todo: make callback local
+				callback = function(obj)
+					selfObj.putObject(obj)
+				end,
+			})
+			if delay then
+				Coroutine.yieldSeconds(--[[---@not nil]] delay)
+			end
+		end
+
+		---@param guid string
+		---@param nilOrHeight nil | boolean
+		---@param nilOrDelay nil | number
+		function self.liftEntry(guid, nilOrHeight, nilOrDelay)
+
+		end
+
+
+
+
+		---@param nilOrSmoothTake nil | boolean
+		---@param nilOrDelay nil | number
+		---@overload fun()
+		function self.placeAll(nilOrSmoothTake, nilOrDelay)
+			---@type nil | boolean
+			local smoothTake
+			if nilOrSmoothTake == nil then
+				smoothTake = config.smoothTake
+			else
+				smoothTake = nilOrSmoothTake
+			end
+
+			---@type nil | number @ delay is passed on to individual funcs
+			local delay
+			if nilOrDelay == nil then
+				delay = config.delay
+			end
+
+			--if delay then
+			--	TableUtils.map(entries, function(_, guid)
+			--		local out = self.placeEntry(guid, smoothTake)
+			--		Coroutine.yieldSeconds(--[[---@not nil]] delay)
+			--		return out
+			--	end)
+			--else
+			--	TableUtils.map(entries, function(_, guid)
+			--		return self.placeEntry(guid, smoothTake)
+			--	end)
+			--end
+		end
+
+		self.invalidateSavedState()
+		return self
+	end,
+	__index = Instance,
+}))

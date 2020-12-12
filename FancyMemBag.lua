@@ -1,3 +1,4 @@
+local Coroutine = require("ge_tts/Coroutine")
 local Logger = require("ge_tts/Logger")
 local Instance = require("ge_tts/Instance")
 local TableUtils = require('ge_tts/TableUtils')
@@ -40,7 +41,7 @@ local MemBagInstance = {}
 
 MemBagInstance.INSTANCE_TYPE = "Absolute MemBag"
 
----@type table<string, table<string, MemBagInstance>>
+---@type table<string, table<MemBagInstance, true>>
 local allMemBagEntries = {}
 
 
@@ -49,22 +50,18 @@ local allMemBagEntries = {}
 ---@param instance MemBagInstance
 local function addToAllEntries(guid, instance)
 	local entries = allMemBagEntries[guid]
-	local instanceGUID = instance.getInstanceGuid()
 	if not entries then
-		allMemBagEntries[guid] = { [instanceGUID] = instance }
+		allMemBagEntries[guid] = { [instance] = true}
+		return
 	else
-		allMemBagEntries[guid][instanceGUID] = instance
+		allMemBagEntries[guid][instance] = true
 	end
 end
 
----@param guid string
----@param instance MemBagInstance
 local function removeFromAllEntries(guid, instance)
 	local entries = allMemBagEntries[guid]
-	Logger.assert(entries, "tried to remove an entry for" .. guid .. "from allEntries but it wasn't there!")
-	local instanceGUID = instance.getInstanceGuid()
-	Logger.assert(entries[instanceGUID], "tried to remove" .. instanceGUID .. "from allEntries for .. " .. guid .. " but it wasn't there!")
-	entries[instanceGUID] = nil
+	Logger.assert(entries, "tried to remove " .. guid .. "from allEntries but it wasn't there!")
+
 end
 
 ---@param container tts__Object
@@ -85,11 +82,10 @@ EventManager.addHandler("onObjectEnterContainer", onObjectEnterContainer)
 ---@param container tts__Object
 ---@param obj tts__Object
 local function onObjectLeaveContainer(container, obj)
-	local parents = allMemBagEntries[obj.getGUID()]
-	if parents then
-		if realParent then
-			realParent.setParent(guid, nil)
-		end
+	local guid = obj.getGUID()
+	local realParent = allMemBagEntries[guid]
+	if realParent then
+		realParent.setParent(guid, nil)
 	end
 end
 EventManager.addHandler("onObjectLeaveContainer", onObjectLeaveContainer)

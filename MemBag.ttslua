@@ -1,7 +1,7 @@
+local Json = require("ge_tts/Json")
 local Logger = require("ge_tts/Logger")
 local Instance = require("ge_tts/Instance")
 local TableUtils = require('ge_tts/TableUtils')
-local EventManager = require("ge_tts/EventManager")
 
 ---@class MemBagInstance : ge_tts__Instance
 
@@ -10,21 +10,19 @@ local EventManager = require("ge_tts/EventManager")
 ---@field rot tts__Vector
 ---@field lock nil | boolean
 ---@field parent nil | string
----@field currentParent nil | string
 
 ---@alias entries table<string, MemBag_entry>
 
 ---@shape MemBag_config
 ---@field smoothTake nil | boolean
----@field lift nil | number
----@field delay nil | number
+---@field ui nil | boolean
 
 ---@type MemBag_config
 local defaultConfig = {
 	smoothTake = true,
-	lift = 1,
-	delay = 0.4,
+    ui = false,
 }
+
 local configMeta = {__index = defaultConfig}
 
 ---@shape MemBagInstance_SavedState : ge_tts__Instance_SavedState
@@ -32,91 +30,19 @@ local configMeta = {__index = defaultConfig}
 ---@field config MemBag_config
 
 ---@class static_MemBagInstance : ge_tts__static_Instance
----@overload fun(savedState: MemBagInstance_SavedState): CenteredMemBagInstance
----@overload fun(object: tts__Container): CenteredMemBagInstance
----@overload fun(object: tts__Container, objects: tts__Object[]): CenteredMemBagInstance
----@overload fun(object: tts__Container, objects: nil | tts__Object[], config: MemBag_config): CenteredMemBagInstance
+---@overload fun(savedState: MemBagInstance_SavedState): MemBagInstance
+---@overload fun(object: tts__Container): MemBagInstance
+---@overload fun(object: tts__Container, objects: tts__Object[]): MemBagInstance
+---@overload fun(object: tts__Container, objects: nil | tts__Object[], config: MemBag_config): MemBagInstance
 local MemBagInstance = {}
 
 MemBagInstance.INSTANCE_TYPE = "Absolute MemBag"
-
----@type table<string, table<string, MemBagInstance>>
-local allMemBagEntries = {}
-
-
----collision checking happens here
----@param guid string
----@param instance MemBagInstance
-local function addToAllEntries(guid, instance)
-	local entries = allMemBagEntries[guid]
-	local instanceGUID = instance.getInstanceGuid()
-	if not entries then
-		allMemBagEntries[guid] = { [instanceGUID] = instance }
-	else
-		allMemBagEntries[guid][instanceGUID] = instance
-	end
-end
-
----@param guid string
----@param instance MemBagInstance
-local function removeFromAllEntries(guid, instance)
-	local entries = allMemBagEntries[guid]
-	Logger.assert(entries, "tried to remove an entry for" .. guid .. "from allEntries but it wasn't there!")
-	local instanceGUID = instance.getInstanceGuid()
-	Logger.assert(entries[instanceGUID], "tried to remove" .. instanceGUID .. "from allEntries for .. " .. guid .. " but it wasn't there!")
-	entries[instanceGUID] = nil
-end
-
----@param container tts__Object
----@param obj tts__Object
-local function onObjectEnterContainer(container, obj)
-	local ObjGUID = obj.getGUID()
-	local bagGUID = container.getGUID()
-	local memParents = allMemBagEntries[ObjGUID]
-	if memParents then
-		for memParent, _ in pairs(memParents) do
-			memParent.setParent(ObjGUID, bagGUID)
-		end
-
-	end
-end
-EventManager.addHandler("onObjectEnterContainer", onObjectEnterContainer)
-
----@param container tts__Object
----@param obj tts__Object
-local function onObjectLeaveContainer(container, obj)
-	local parents = allMemBagEntries[obj.getGUID()]
-	if parents then
-		if realParent then
-			realParent.setParent(guid, nil)
-		end
-	end
-end
-EventManager.addHandler("onObjectLeaveContainer", onObjectLeaveContainer)
-
----@alias filterCallback fun(container: tts__Object, obj: tts__Object, result:any): boolean
-
---- this is the filtering part (always ask parent for permission before going anywhere)
----@param container tts__Object
----@param obj tts__Object
-local function filterMemBagChild(container, obj)
-	local parent = allMemBagEntries[obj.getGUID()]
-	return parent and parent.filterObject(container, obj)
-end
-
-EventManager.addHandler("filterObjectEnterContainer", filterMemBagChild)
-
-local function waitIfDelay(nilOrDelay, co)
-	if nilOrDelay then
-		Coroutine
-	end
-end
 
 setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
 	---@param objOrSavedState tts__Container | CenteredMemBagInstance_SavedState
 	---@param nilOrEntries nil | entries
 	---@param nilOrConfig nil | MemBag_config
-	__call = function(objOrSavedState, nilOrEntries, nilOrConfig)
+	__call = function(_, objOrSavedState, nilOrEntries, nilOrConfig)
 		local self = --[[---@type MemBagInstance]] Instance(objOrSavedState) -- super constructor
 
 		---@type entries
@@ -126,7 +52,7 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
 
 		---@param entry MemBag_entry
 		---@param guid string
-		---@return MemBag_entry
+		---@return ge_tts__Instance
 		local function entryMapFunc(entry, guid)
 			return self.addEntry(guid, entry)
 		end
@@ -152,7 +78,6 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
 		end
 
 		local superSave = self.save
-		-- Then, we replace this method with our own implementation...
 
 		---@return MemBagInstance_SavedState
 		function self.save()
@@ -184,37 +109,56 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
 			return TableUtils.copy(entries[guid], true)
 		end
 
-		---This is basically ripped from Instance.takeObject().
-		---Looks for guid in the scene and in `parent` (self obj by default, or whatever guid is in entry)
+		---This is basically ripped from Instance constructor, i just added extra asserts cuz i'm paranoid
+		---Looks for guid in the scene and in container (or self if no container provided), then creates an Instance from it
 		---@param guid string
-		---@return tts__IndexedSimpleObjectState | tts__Object
-		function self.findEntry(guid)
-			---@type tts__Container, nil | tts__IndexedSimpleObjectState, any
-			local parent, nilOrState, _
+		---@param nilOrContainer nil | tts__Container
+		---@return ge_tts__Instance
+		function self.initInstance(guid, nilOrContainer)
+			local existingInstance = Instance.getInstance(guid)
+			if existingInstance then
+				return --[[---@not nil]] existingInstance
+			end
 
-			local parentGUID = entries[guid] and entries[guid].parent
-			parent = --[[---@type tts__Container]] (parentGUID and getObjectFromGUID(--[[---@not nil]] parentGUID) or self.getObject()) -- jeez
-			Logger.assert(parent ~= nil,
-					string.format("MemBag %s: parent %s of entry %s doesn't exist", self.getInstanceGuid(), parentGUID, guid))
-			Logger.assert(parent.getObjects(),
-					string.format("MemBag %s: parent %s of entry %s is not a container", self.getInstanceGuid(), parentGUID, guid))
+            local container = --[[---@not nil]] nilOrContainer or self.getObject()
+            local selfGUID, containerGUID = container.getGUID(), self.getInstanceGuid()
+            Logger.assert(nilOrContainer ~= nil,
+                    string.format("MemBag %s: container %s of new entry %s doesn't exist", selfGUID, containerGUID, guid))
+            Logger.assert(container.getObjects,
+                    string.format("MemBag %s: container %s of new entry %s is not a container", selfGUID, containerGUID, guid))
 
-			nilOrState, _ = TableUtils.detect(parent.getObjects(), function(objectState)
-				return objectState.guid == guid
-			end)
+            local nilOrState, _ = TableUtils.detect(container.getObjects(), function(objectState)
+                return objectState.guid == guid
+            end)
 
 			local nilOrObj = getObjectFromGUID(guid)
 
 			Logger.assert(nilOrState or nilOrObj,
-					"object with guid " .. guid .. "not found!")
+					string.format("MemBag %s: object with guid %s not found!", selfGUID, guid))
 			Logger.assert(not (nilOrState and nilOrObj),
-					"objects with guid" .. guid .. " exist both in and out of parent!")
+					string.format("MemBag %s: objects with guid %s exist both in and out of parent!", selfGUID, guid))
 
-			return --[[---@not nil]] nilOrState or --[[---@not nil]] nilOrObj
+			if nilOrObj then
+                local obj = --[[---@not nil]] nilOrObj
+                local decodedState = Json.decode(--[[---@not nil]] obj.script_state)
+                if Instance.isSavedState(decodedState) then
+                    return Instance(--[[---@type ge_tts__Instance_SavedState]] decodedState)
+                else
+                    return Instance(obj)
+                end
+			else -- then nilOrState exists
+				local state = --[[---@not nil]] nilOrState
+				local decodedState = Json.decode(--[[---@not nil]] state.lua_script_state)
+				if Instance.isSavedState(decodedState) then
+					return Instance(--[[---@type ge_tts__Instance_SavedState]] decodedState)
+				else
+					return Instance(guid, nilOrContainer)
+				end
+			end
 		end
 
 		---Gets bag position from real-world position, used when adding entries
-		---This one i straightforward but meant to be overridden.
+		---This one is straightforward but meant to be overridden.
 		---@param pos tts__CharVectorShape
 		---@param rot tts__CharVectorShape
 		---@return tts__Vector, tts__Vector
@@ -231,25 +175,14 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
 
 		---Looks inside and outside self for matching object and makes an Instance for it, then adds it to entries.
 		---Errors if matching object does not exist either directly in the scene or inside selfObj.
-		---@param guid string
+		---@param entryInstance ge_tts__Instance
 		---@param nilOrData nil | MemBag_entry
-		---@return MemBag_entry
+		---@return ge_tts__Instance
 		---@overload fun(guid: string): ge_tts__Instance
-		function self.addEntry(guid, nilOrData)
-			addToAllEntries(guid, self)
-
-			---@type tts__Object
-			local entryObj
-
-			-- this next block is just paranoia to ensure the obj exists
-
-			---@type tts__Object | tts__IndexedSimpleObjectState
-			local foundEntry = self.findEntry(guid)
-			if type(foundEntry == "table") then
-				entryObj = self.getObject()
-			else -- it's an object
-				entryObj = --[[---@type tts__Object]] foundEntry
-			end
+		---@overload fun(guid: string, nilOrData: nil | MemBag_entry): ge_tts__Instance
+		function self.addEntry(entryInstance, nilOrData)
+			local entryObj = entryInstance.getObject()
+			local guid = entryInstance.getInstanceGuid()
 
 			if nilOrData then
 				local data = TableUtils.copy(--[[---@not nil]] nilOrData)
@@ -265,149 +198,87 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
 			end
 
 			self.invalidateSavedState()
-			return entries[guid]
-		end
-
-		---@param guid string
-		---@param parent nil | string
-		function self.setParent(guid, parent)
-			Logger.assert(entries[guid],
-					string.format("setParent: MemBag %s does not have entry %s", self.getInstanceGuid(), guid))
-			entries[guid].parent = parent
-			self.invalidateSavedState()
+			return entryInstance
 		end
 
 		---@param guid string
 		function self.removeEntry(guid)
 			entries[guid] = nil
-			allMemBagEntries[guid] = nil
 			self.invalidateSavedState()
 		end
 
-		---@param obj tts__Object
-		---@param nilOrDelay nil | number
-		function self.placeEntryCallback(obj, nilOrDelay)
-			local lock = entries[obj.getGUID()].lock or false
-			obj.setLock(lock)
-			if nilOrDelay then
-
-			end
+        ---Caalled after placing an entry
+		---@param entry ge_tts__Instance
+		function self.onPlace(entry)
+			local lock = entries[entry.getInstanceGuid()].lock or false
+			entry.getObject().setLock(lock)
 		end
 
 		---@param guid string
 		---@param nilOrSmoothTake nil | boolean
-		---@param nilOrDelay nil | number
-		function self.placeEntry(guid, nilOrSmoothTake, nilOrDelay)
+		function self.placeEntry(guid, nilOrSmoothTake)
 			Logger.assert(entries[guid], "no entry with guid " .. guid)
 			local entry = entries[guid]
 
 			-- todo: man handling default args is awkward. ask for feedback on style
 			local smoothTake = (nilOrSmoothTake == nil) and config.smoothTake or nilOrSmoothTake
-			local delay = (nilOrDelay == nil) and config.delay or nilOrDelay
 
 			local pos, rot = self.applyTransform(entry)
 
-			local parent = --[[---@not nil]] entries[guid].parent
-			if parent then
-				---@type tts__Object_GuidTakeObjectParameters
-				local params = {
-					guid = guid,
-					position = pos,
-					rotation = rot,
-					smooth = smoothTake,
-					callback_function = function(obj) self.placeEntryCallback(obj, delay) end,
-				}
-				(--[[---@not nil]] getObjectFromGUID(parent)).takeObject(params)
-			else -- it's an object
-				local entryObj = --[[---@not nil]] getObjectFromGUID(guid)
+			local entryInstance = --[[---@not nil]] Instance.getInstance(guid)
+			Logger.assert(entryInstance, "instance for entry " .. guid .. " not found!")
 
-				if smoothTake then
-					entryObj.setPositionSmooth(pos, false, true)
-					entryObj.setRotationSmooth(pos, false, true)
-				else
-					entryObj.setPosition(pos)
-					entryObj.setRotation(rot)
-				end
-
-				self.placeEntryCallback(entryObj, delay)
-			end
+			---@type ge_tts__Instance_TakeObjectOptions
+			local params = {
+				guid = guid,
+				position = pos,
+				rotation = rot,
+				smooth = smoothTake,
+				callback = function() return self.onPlace(entryInstance) end,
+			}
+			entryInstance.takeObject(params)
 		end
 
-		---by default we only let children go into their parent bag. This can be overridden to be more permissive ofc
-		---@param container tts__Object
-		---@param obj tts__Object
-		function self.filterObject(container, obj)
-			if container == self.getObject() then
-				return true
-			end
-		end
-
-		---@param entryObj tts__Object
-		---@param co thread
-		---@param nilOrDelay nil | number
-		function self.recallEntry_callback(entryObj, co, nilOrDelay)
-			self.getObject().putObject(entryObj)
-			if nilOrDelay then
-				Wait.time(function() coroutine.resume(co) end,  --[[---@not nil]] nilOrDelay)
-			else
-				coroutine.resume(co)
-			end
+		---@param entryInstance ge_tts__Instance
+		function self.onRecall(entryInstance)
+			self.getObject().putObject(entryInstance.getObject())
 		end
 
 		---@param guid string
-		---@param nilOrDelay nil | number
-		function self.recallEntry(guid, nilOrDelay)
+		function self.recallEntry(guid)
 			---@type nil | number
-			local delay = (nilOrDelay == nil) and config.delay or nilOrDelay
 
-			local selfObj = self.getObject()
+			local entryInstance = --[[---@not nil]] Instance.getInstance(guid)
+			Logger.assert(entryInstance, self.getInstanceGuid() .. " tried to recall a non-existing instance of guid " .. guid)
 
-			local parent = --[[---@not nil]] entries[guid].parent
-			if parent then
-				local parentObj = --[[---@not nil]] getObjectFromGUID(parent)
-
-				---@type tts__Object_GuidTakeObjectParameters
-				local params = {
-					guid = guid,
-					position = parentObj.getPosition() + Vector(0,1,0),
-					smooth = true,
-					callback_function = function(obj)
-						local co, _ = coroutine.running()
-						self.recallEntry_callback(obj, delay, co)
-					end
-				}
-				(--[[---@not nil]] getObjectFromGUID(parent)).takeObject(params)
-			else -- it's an object
-				selfObj.putObject(--[[---@not nil]] getObjectFromGUID(guid))
-			end
-
-			if delay then
-				coroutine.yield() -- it's now up to the callback to resume
-			end
+			---@type ge_tts__Instance_TakeObjectOptions
+			local params = {
+				guid = guid,
+				position = entryInstance.getObject().getPosition() + Vector(0,1,0),
+				smooth = false,
+				callback = function()
+					self.onRecall(entryInstance)
+				end
+			}
+				entryInstance.takeObject(params)
 		end
 
 		---@param nilOrSmoothTake nil | boolean
-		---@param nilOrDelay nil | number
 		---@overload fun(nilOrSmoothTake: nil | number)
-		---@overload fun()
-		function self.place(nilOrSmoothTake, nilOrDelay)
+		---@overload fun(): any
+		function self.place(nilOrSmoothTake)
 			local smoothTake = (nilOrSmoothTake == nil) and config.smoothTake or nilOrSmoothTake
-			local delay = (nilOrDelay == nil) and config.delay or nilOrDelay
 
 			return TableUtils.map(entries, function(_, guid)
-				return self.placeEntry(guid, smoothTake, delay)
+				self.placeEntry(guid, smoothTake)
+				return guid
 			end)
 		end
 
-		---@param nilOrDelay nil | number
-		---@overload fun(nilOrDelay: nil | number)
-		---@overload fun()
-		function self.recall(nilOrSmoothTake, nilOrDelay)
-			local smoothTake = (nilOrSmoothTake == nil) and config.smoothTake or nilOrSmoothTake
-			local delay = (nilOrDelay == nil) and config.delay or nilOrDelay
-
-			return TableUtils.map(entries, function(_, guid)
-				return self.recallEntry(guid, delay)
+		function self.recall()
+			TableUtils.map(entries, function(_, guid)
+				self.recallEntry(guid)
+				return guid
 			end)
 		end
 
@@ -415,3 +286,5 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
 	end,
 	__index = Instance,
 }))
+
+return MemBagInstance

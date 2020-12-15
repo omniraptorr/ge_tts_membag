@@ -1,0 +1,10 @@
+local TableUtils = require('ge_tts/TableUtils')
+
+---@class GUIMemBagInstance : MemBagInstance
+
+---@shape PendingMemBagEntry: MemBagEntry
+---@field blinkID number
+
+---@shape GUIMemBagConfig: MemBagConfig
+---@field gui nil | boolean
+

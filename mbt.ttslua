@@ -1,0 +1,10 @@
+require("MemBag/filterInstanceContainers")
+
+local MemBag = require("MemBag/MemBag")
+
+function onLoad(save_state)
+    local bagObj = --[[---@type tts__Container]] getObjectFromGUID("222a81")
+    -- print(type(bagObj))
+    -- print(bagObj ~= nil)
+    local bag = MemBag(bagObj)
+end

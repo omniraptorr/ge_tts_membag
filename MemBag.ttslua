@@ -5,52 +5,50 @@ local TableUtils = require('ge_tts/TableUtils')
 
 ---@class MemBagInstance : ge_tts__Instance
 
----@shape MemBag_entry
+---@class static_MemBagInstance : ge_tts__static_Instance
+---@overload fun(savedState: MemBagInstance_SavedState): MemBagInstance
+---@overload fun(object: tts__Container): MemBagInstance
+---@overload fun(object: tts__Container, entries: nil | entries): MemBagInstance
+---@overload fun(object: tts__Container, objects: nil | entries, config: MemBagConfig): MemBagInstance
+local MemBagInstance = {}
+
+---@shape MemBagEntry
 ---@field pos tts__Vector
 ---@field rot tts__Vector
 ---@field lock nil | boolean
 ---@field parent nil | string
 
----@alias entries table<string, MemBag_entry>
+---@alias entries table<string, MemBagEntry>
 
----@shape MemBag_config
+---@shape MemBagConfig
 ---@field smoothTake nil | boolean
----@field ui nil | boolean
-
----@type MemBag_config
-local defaultConfig = {
-	smoothTake = true,
-    ui = false,
-}
-
-local configMeta = {__index = defaultConfig}
 
 ---@shape MemBagInstance_SavedState : ge_tts__Instance_SavedState
 ---@field entries entries
----@field config MemBag_config
-
----@class static_MemBagInstance : ge_tts__static_Instance
----@overload fun(savedState: MemBagInstance_SavedState): MemBagInstance
----@overload fun(object: tts__Container): MemBagInstance
----@overload fun(object: tts__Container, objects: tts__Object[]): MemBagInstance
----@overload fun(object: tts__Container, objects: nil | tts__Object[], config: MemBag_config): MemBagInstance
-local MemBagInstance = {}
+---@field config MemBagConfig
 
 MemBagInstance.INSTANCE_TYPE = "Absolute MemBag"
+
+---@type MemBagConfig
+MemBagInstance.defaultConfig = {
+	smoothTake = true,
+}
+local configMeta = {__index = MemBagInstance.defaultConfig}
+
 
 setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
 	---@param objOrSavedState tts__Container | CenteredMemBagInstance_SavedState
 	---@param nilOrEntries nil | entries
-	---@param nilOrConfig nil | MemBag_config
+	---@param nilOrConfig nil | MemBagConfig
 	__call = function(_, objOrSavedState, nilOrEntries, nilOrConfig)
 		local self = --[[---@type MemBagInstance]] Instance(objOrSavedState) -- super constructor
 
 		---@type entries
 		local entries
-		---@type MemBag_config
+		---@type MemBagConfig
 		local config
 
-		---@param entry MemBag_entry
+		---@param entry MemBagEntry
 		---@param guid string
 		---@return ge_tts__Instance
 		local function entryMapFunc(entry, guid)
@@ -104,7 +102,7 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
 
 		---Fetches existing entry instance
 		---@param guid string
-		---@return nil | MemBag_entry
+		---@return nil | MemBagEntry
 		function self.getEntryData(guid)
 			return TableUtils.copy(entries[guid], true)
 		end
@@ -167,7 +165,7 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
 		end
 
 		---Reverse of getTransform- gets real-world position from bag position. Used when placing entries
-		---@param entry MemBag_entry
+		---@param entry MemBagEntry
 		---@return tts__Vector, tts__Vector
 		function self.applyTransform(entry)
 			return entry.pos, entry.rot
@@ -176,10 +174,10 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
 		---Looks inside and outside self for matching object and makes an Instance for it, then adds it to entries.
 		---Errors if matching object does not exist either directly in the scene or inside selfObj.
 		---@param entryInstance ge_tts__Instance
-		---@param nilOrData nil | MemBag_entry
+		---@param nilOrData nil | MemBagEntry
 		---@return ge_tts__Instance
 		---@overload fun(guid: string): ge_tts__Instance
-		---@overload fun(guid: string, nilOrData: nil | MemBag_entry): ge_tts__Instance
+		---@overload fun(guid: string, nilOrData: nil | MemBagEntry): ge_tts__Instance
 		function self.addEntry(entryInstance, nilOrData)
 			local entryObj = entryInstance.getObject()
 			local guid = entryInstance.getInstanceGuid()

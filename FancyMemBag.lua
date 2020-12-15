@@ -1,4 +1,3 @@
-local Coroutine = require("ge_tts/Coroutine")
 local Logger = require("ge_tts/Logger")
 local Instance = require("ge_tts/Instance")
 local TableUtils = require('ge_tts/TableUtils')
@@ -11,14 +10,12 @@ local EventManager = require("ge_tts/EventManager")
 ---@field rot tts__Vector
 ---@field lock nil | boolean
 ---@field parent nil | string
----@field currentParent nil | string
 
 ---@alias entries table<string, MemBag_entry>
 
 ---@shape MemBag_config
 ---@field smoothTake nil | boolean
 ---@field lift nil | number
----@field delay nil | number
 
 ---@type MemBag_config
 local defaultConfig = {
@@ -26,6 +23,7 @@ local defaultConfig = {
 	lift = 1,
 	delay = 0.4,
 }
+
 local configMeta = {__index = defaultConfig}
 
 ---@shape MemBagInstance_SavedState : ge_tts__Instance_SavedState
@@ -40,73 +38,6 @@ local configMeta = {__index = defaultConfig}
 local MemBagInstance = {}
 
 MemBagInstance.INSTANCE_TYPE = "Absolute MemBag"
-
----@type table<string, table<MemBagInstance, true>>
-local allMemBagEntries = {}
-
-
----collision checking happens here
----@param guid string
----@param instance MemBagInstance
-local function addToAllEntries(guid, instance)
-	local entries = allMemBagEntries[guid]
-	if not entries then
-		allMemBagEntries[guid] = { [instance] = true}
-		return
-	else
-		allMemBagEntries[guid][instance] = true
-	end
-end
-
-local function removeFromAllEntries(guid, instance)
-	local entries = allMemBagEntries[guid]
-	Logger.assert(entries, "tried to remove " .. guid .. "from allEntries but it wasn't there!")
-
-end
-
----@param container tts__Object
----@param obj tts__Object
-local function onObjectEnterContainer(container, obj)
-	local ObjGUID = obj.getGUID()
-	local bagGUID = container.getGUID()
-	local memParents = allMemBagEntries[ObjGUID]
-	if memParents then
-		for memParent, _ in pairs(memParents) do
-			memParent.setParent(ObjGUID, bagGUID)
-		end
-
-	end
-end
-EventManager.addHandler("onObjectEnterContainer", onObjectEnterContainer)
-
----@param container tts__Object
----@param obj tts__Object
-local function onObjectLeaveContainer(container, obj)
-	local guid = obj.getGUID()
-	local realParent = allMemBagEntries[guid]
-	if realParent then
-		realParent.setParent(guid, nil)
-	end
-end
-EventManager.addHandler("onObjectLeaveContainer", onObjectLeaveContainer)
-
----@alias filterCallback fun(container: tts__Object, obj: tts__Object, result:any): boolean
-
---- this is the filtering part (always ask parent for permission before going anywhere)
----@param container tts__Object
----@param obj tts__Object
-local function filterMemBagChild(container, obj)
-	local parent = allMemBagEntries[obj.getGUID()]
-	return parent and parent.filterObject(container, obj)
-end
-
-EventManager.addHandler("filterObjectEnterContainer", filterMemBagChild)
-
-local function waitIfDelay(nilOrDelay, co)
-	if nilOrDelay then
-		Coroutine
-	end
-end
 
 setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
 	---@param objOrSavedState tts__Container | CenteredMemBagInstance_SavedState
@@ -293,6 +224,7 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
 		---@param guid string
 		---@param nilOrSmoothTake nil | boolean
 		---@param nilOrDelay nil | number
+		-- just copy/paste from parent
 		function self.placeEntry(guid, nilOrSmoothTake, nilOrDelay)
 			Logger.assert(entries[guid], "no entry with guid " .. guid)
 			local entry = entries[guid]

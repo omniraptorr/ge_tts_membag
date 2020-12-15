@@ -31,92 +31,100 @@ MemBagInstance.INSTANCE_TYPE = "Absolute MemBag"
 
 ---@type MemBagConfig
 MemBagInstance.defaultConfig = {
-	smoothTake = true,
+    smoothTake = true,
 }
-local configMeta = {__index = MemBagInstance.defaultConfig}
-
+local configMeta = { __index = MemBagInstance.defaultConfig }
 
 setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
-	---@param objOrSavedState tts__Container | CenteredMemBagInstance_SavedState
-	---@param nilOrEntries nil | entries
-	---@param nilOrConfig nil | MemBagConfig
-	__call = function(_, objOrSavedState, nilOrEntries, nilOrConfig)
-		local self = --[[---@type MemBagInstance]] Instance(objOrSavedState) -- super constructor
+    ---@param objOrSavedState tts__Container | CenteredMemBagInstance_SavedState
+    ---@param nilOrEntries nil | entries
+    ---@param nilOrConfig nil | MemBagConfig
+    __call = function(_, objOrSavedState, nilOrEntries, nilOrConfig)
+        local self = --[[---@type MemBagInstance]] Instance(objOrSavedState) -- super constructor
 
-		---@type entries
-		local entries
-		---@type MemBagConfig
-		local config
+        ---@type entries
+        local entries
+        ---@type MemBagConfig
+        local config
 
-		---@param entry MemBagEntry
-		---@param guid string
-		---@return ge_tts__Instance
-		local function entryMapFunc(entry, guid)
-			return self.addEntry(guid, entry)
-		end
+        ---@param entry MemBagEntry
+        ---@param guid string
+        ---@return ge_tts__Instance
+        local function entryMapFunc(entry, guid)
+            return self.addEntry(guid, entry)
+        end
 
-		local isSavedState = MemBagInstance.isSavedState(objOrSavedState)
-		if isSavedState then
-			local savedState = --[[---@type MemBagInstance_SavedState]] objOrSavedState
+        local isSavedState = MemBagInstance.isSavedState(objOrSavedState)
+        if isSavedState then
+            local savedState = --[[---@type MemBagInstance_SavedState]] objOrSavedState
 
-			config = setmetatable(savedState.config, configMeta)
-			TableUtils.map(savedState.entries, entryMapFunc)
-		else
-			if nilOrEntries then
-				TableUtils.map(--[[---@not nil]] nilOrEntries, entryMapFunc)
-			else
-				entries = {}
-			end
+            config = setmetatable(savedState.config, configMeta)
+            TableUtils.map(savedState.entries, entryMapFunc)
+        else
+            if nilOrEntries then
+                TableUtils.map(--[[---@not nil]] nilOrEntries, entryMapFunc)
+            else
+                entries = {}
+            end
 
-			if nilOrConfig then
-				config = setmetatable(TableUtils.copy(config), configMeta)
-			else
-				config = setmetatable({}, configMeta)
-			end
-		end
+            if nilOrConfig then
+                config = setmetatable(TableUtils.copy(config), configMeta)
+            else
+                config = setmetatable({}, configMeta)
+            end
+        end
 
-		local superSave = self.save
+        local superSave = self.save
 
-		---@return MemBagInstance_SavedState
-		function self.save()
-			-- ge_tts__Instance (our super class) has its own data that it needs to save. So we call
-			-- through to the original (super) save() method, and merge its result with our own data
-			-- i.e. our object entries
-			return --[[---@type MemBagInstance_SavedState]] TableUtils.merge(superSave(), {
-				config = config,
-				entries = entries,
-			})
-		end
+        ---@return MemBagInstance_SavedState
+        function self.save()
+            -- ge_tts__Instance (our super class) has its own data that it needs to save. So we call
+            -- through to the original (super) save() method, and merge its result with our own data
+            -- i.e. our object entries
+            return --[[---@type MemBagInstance_SavedState]] TableUtils.merge(superSave(), {
+                config = config,
+                entries = entries,
+            })
+        end
 
-		---@return string
-		function self.getInstanceType()
-			return MemBagInstance.INSTANCE_TYPE
-		end
+        function self.getConfig()
+            return TableUtils.copy(config)
+        end
 
-		local superGetObject = self.getObject
-		---This overload is really just for Luanalysis, i didn't feel like casting to container every time
-		---@return tts__Container
-		function self.getObject()
-			return superGetObject()
-		end
+        ---@param newConfig MemBagConfig
+        function self.setConfig(newConfig)
+            config = setmetatable(TableUtils.copy(newConfig), configMeta)
+        end
 
-		---Fetches existing entry instance
-		---@param guid string
-		---@return nil | MemBagEntry
-		function self.getEntryData(guid)
-			return TableUtils.copy(entries[guid], true)
-		end
+        ---@return string
+        function self.getInstanceType()
+            return MemBagInstance.INSTANCE_TYPE
+        end
 
-		---This is basically ripped from Instance constructor, i just added extra asserts cuz i'm paranoid
-		---Looks for guid in the scene and in container (or self if no container provided), then creates an Instance from it
-		---@param guid string
-		---@param nilOrContainer nil | tts__Container
-		---@return ge_tts__Instance
-		function self.initInstance(guid, nilOrContainer)
-			local existingInstance = Instance.getInstance(guid)
-			if existingInstance then
-				return --[[---@not nil]] existingInstance
-			end
+        local superGetObject = self.getObject
+        ---This overload is really just for Luanalysis, i didn't feel like casting to container every time
+        ---@return tts__Container
+        function self.getObject()
+            return superGetObject()
+        end
+
+        ---Fetches existing entry instance
+        ---@param guid string
+        ---@return nil | MemBagEntry
+        function self.getEntryData(guid)
+            return TableUtils.copy(entries[guid], true)
+        end
+
+        ---This is basically ripped from Instance constructor, i just added extra asserts cuz i'm paranoid
+        ---Looks for guid in the scene and in container (or self if no container provided), then creates an Instance from it
+        ---@param guid string
+        ---@param nilOrContainer nil | tts__Container
+        ---@return ge_tts__Instance
+        function self.initInstance(guid, nilOrContainer)
+            local existingInstance = Instance.getInstance(guid)
+            if existingInstance then
+                return --[[---@not nil]] existingInstance
+            end
 
             local container = --[[---@not nil]] nilOrContainer or self.getObject()
             local selfGUID, containerGUID = container.getGUID(), self.getInstanceGuid()
@@ -129,14 +137,14 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
                 return objectState.guid == guid
             end)
 
-			local nilOrObj = getObjectFromGUID(guid)
+            local nilOrObj = getObjectFromGUID(guid)
 
-			Logger.assert(nilOrState or nilOrObj,
-					string.format("MemBag %s: object with guid %s not found!", selfGUID, guid))
-			Logger.assert(not (nilOrState and nilOrObj),
-					string.format("MemBag %s: objects with guid %s exist both in and out of parent!", selfGUID, guid))
+            Logger.assert(nilOrState or nilOrObj,
+                    string.format("MemBag %s: object with guid %s not found!", selfGUID, guid))
+            Logger.assert(not (nilOrState and nilOrObj),
+                    string.format("MemBag %s: objects with guid %s exist both in and out of parent!", selfGUID, guid))
 
-			if nilOrObj then
+            if nilOrObj then
                 local obj = --[[---@not nil]] nilOrObj
                 local decodedState = Json.decode(--[[---@not nil]] obj.script_state)
                 if Instance.isSavedState(decodedState) then
@@ -144,144 +152,147 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
                 else
                     return Instance(obj)
                 end
-			else -- then nilOrState exists
-				local state = --[[---@not nil]] nilOrState
-				local decodedState = Json.decode(--[[---@not nil]] state.lua_script_state)
-				if Instance.isSavedState(decodedState) then
-					return Instance(--[[---@type ge_tts__Instance_SavedState]] decodedState)
-				else
-					return Instance(guid, nilOrContainer)
-				end
-			end
-		end
+            else
+                -- then nilOrState exists
+                local state = --[[---@not nil]] nilOrState
+                local decodedState = Json.decode(--[[---@not nil]] state.lua_script_state)
+                if Instance.isSavedState(decodedState) then
+                    return Instance(--[[---@type ge_tts__Instance_SavedState]] decodedState)
+                else
+                    return Instance(guid, nilOrContainer)
+                end
+            end
+        end
 
-		---Gets bag position from real-world position, used when adding entries
-		---This one is straightforward but meant to be overridden.
-		---@param pos tts__CharVectorShape
-		---@param rot tts__CharVectorShape
-		---@return tts__Vector, tts__Vector
-		function self.getTransform(pos, rot)
-			return Vector(pos), Vector(rot)
-		end
+        ---Gets bag position from real-world position, used when adding entries
+        ---This one is straightforward but meant to be overridden.
+        ---@param pos tts__CharVectorShape
+        ---@param rot tts__CharVectorShape
+        ---@return tts__Vector, tts__Vector
+        function self.getTransform(pos, rot)
+            return Vector(pos), Vector(rot)
+        end
 
-		---Reverse of getTransform- gets real-world position from bag position. Used when placing entries
-		---@param entry MemBagEntry
-		---@return tts__Vector, tts__Vector
-		function self.applyTransform(entry)
-			return entry.pos, entry.rot
-		end
+        ---Reverse of getTransform- gets real-world position from bag position. Used when placing entries
+        ---@param entry MemBagEntry
+        ---@return tts__Vector, tts__Vector
+        function self.applyTransform(entry)
+            return entry.pos, entry.rot
+        end
 
-		---Looks inside and outside self for matching object and makes an Instance for it, then adds it to entries.
-		---Errors if matching object does not exist either directly in the scene or inside selfObj.
-		---@param entryInstance ge_tts__Instance
-		---@param nilOrData nil | MemBagEntry
-		---@return ge_tts__Instance
-		---@overload fun(guid: string): ge_tts__Instance
-		---@overload fun(guid: string, nilOrData: nil | MemBagEntry): ge_tts__Instance
-		function self.addEntry(entryInstance, nilOrData)
-			local entryObj = entryInstance.getObject()
-			local guid = entryInstance.getInstanceGuid()
+        ---Looks inside and outside self for matching object and makes an Instance for it, then adds it to entries.
+        ---Errors if matching object does not exist either directly in the scene or inside selfObj.
+        ---@param entryInstance ge_tts__Instance
+        ---@param nilOrData nil | MemBagEntry
+        ---@return ge_tts__Instance
+        ---@overload fun(guid: string): ge_tts__Instance
+        ---@overload fun(guid: string, nilOrData: nil | MemBagEntry): ge_tts__Instance
+        function self.addEntry(entryInstance, nilOrData)
+            local entryObj = entryInstance.getObject()
+            local guid = entryInstance.getInstanceGuid()
 
-			if nilOrData then
-				local data = TableUtils.copy(--[[---@not nil]] nilOrData)
-				data.pos, data.rot = self.getTransform(data.pos, data.rot)
-				entries[guid] = data
-			else
-				local pos, rot = self.getTransform(entryObj.getPosition(), entryObj.getRotation())
-				entries[guid] = {
-					pos = pos,
-					rot = rot,
-					lock = entryObj.getLock()
-				}
-			end
+            if nilOrData then
+                local data = TableUtils.copy(--[[---@not nil]] nilOrData)
+                data.pos, data.rot = self.getTransform(data.pos, data.rot)
+                entries[guid] = data
+            else
+                local pos, rot = self.getTransform(entryObj.getPosition(), entryObj.getRotation())
+                entries[guid] = {
+                    pos = pos,
+                    rot = rot,
+                    lock = entryObj.getLock()
+                }
+            end
 
-			self.invalidateSavedState()
-			return entryInstance
-		end
+            self.invalidateSavedState()
+            return entryInstance
+        end
 
-		---@param guid string
-		function self.removeEntry(guid)
-			entries[guid] = nil
-			self.invalidateSavedState()
-		end
+        ---@param guid string
+        function self.removeEntry(guid)
+            entries[guid] = nil
+            self.invalidateSavedState()
+        end
 
         ---Caalled after placing an entry
-		---@param entry ge_tts__Instance
-		function self.onPlace(entry)
-			local lock = entries[entry.getInstanceGuid()].lock or false
-			entry.getObject().setLock(lock)
-		end
+        ---@param entry ge_tts__Instance
+        function self.onPlace(entry)
+            local lock = entries[entry.getInstanceGuid()].lock or false
+            entry.getObject().setLock(lock)
+        end
 
-		---@param guid string
-		---@param nilOrSmoothTake nil | boolean
-		function self.placeEntry(guid, nilOrSmoothTake)
-			Logger.assert(entries[guid], "no entry with guid " .. guid)
-			local entry = entries[guid]
+        ---@param guid string
+        ---@param nilOrSmoothTake nil | boolean
+        function self.placeEntry(guid, nilOrSmoothTake)
+            Logger.assert(entries[guid], "no entry with guid " .. guid)
+            local entry = entries[guid]
 
-			local smoothTake = (nilOrSmoothTake == nil) and config.smoothTake or nilOrSmoothTake
+            local smoothTake = (nilOrSmoothTake == nil) and config.smoothTake or nilOrSmoothTake
 
-			local pos, rot = self.applyTransform(entry)
+            local pos, rot = self.applyTransform(entry)
 
-			local entryInstance = --[[---@not nil]] Instance.getInstance(guid)
-			Logger.assert(entryInstance, "instance for entry " .. guid .. " not found!")
+            local entryInstance = --[[---@not nil]] Instance.getInstance(guid)
+            Logger.assert(entryInstance, "instance for entry " .. guid .. " not found!")
 
-			---@type ge_tts__Instance_TakeObjectOptions
-			local params = {
-				guid = guid,
-				position = pos,
-				rotation = rot,
-				smooth = smoothTake,
-				callback = function() return self.onPlace(entryInstance) end,
-			}
-			entryInstance.takeObject(params)
-		end
+            ---@type ge_tts__Instance_TakeObjectOptions
+            local params = {
+                guid = guid,
+                position = pos,
+                rotation = rot,
+                smooth = smoothTake,
+                callback = function()
+                    return self.onPlace(entryInstance)
+                end,
+            }
+            entryInstance.takeObject(params)
+        end
 
-		---@param entryInstance ge_tts__Instance
-		function self.onRecall(entryInstance)
-			self.getObject().putObject(entryInstance.getObject())
-		end
+        ---@param entryInstance ge_tts__Instance
+        function self.onRecall(entryInstance)
+            self.getObject().putObject(entryInstance.getObject())
+        end
 
-		---@param guid string
-		function self.recallEntry(guid)
-			---@type nil | number
+        ---@param guid string
+        function self.recallEntry(guid)
+            ---@type nil | number
 
-			local entryInstance = --[[---@not nil]] Instance.getInstance(guid)
-			Logger.assert(entryInstance, self.getInstanceGuid() .. " tried to recall a non-existing instance of guid " .. guid)
+            local entryInstance = --[[---@not nil]] Instance.getInstance(guid)
+            Logger.assert(entryInstance, self.getInstanceGuid() .. " tried to recall a non-existing instance of guid " .. guid)
 
-			---@type ge_tts__Instance_TakeObjectOptions
-			local params = {
-				guid = guid,
-				position = entryInstance.getObject().getPosition() + Vector(0,1,0),
-				smooth = false,
-				callback = function()
-					self.onRecall(entryInstance)
-				end
-			}
-				entryInstance.takeObject(params)
-		end
+            ---@type ge_tts__Instance_TakeObjectOptions
+            local params = {
+                guid = guid,
+                position = entryInstance.getObject().getPosition() + Vector(0, 1, 0),
+                smooth = false,
+                callback = function()
+                    self.onRecall(entryInstance)
+                end
+            }
+            entryInstance.takeObject(params)
+        end
 
-		---@param nilOrSmoothTake nil | boolean
-		---@overload fun(nilOrSmoothTake: nil | number)
-		---@overload fun(): any
-		function self.place(nilOrSmoothTake)
-			local smoothTake = (nilOrSmoothTake == nil) and config.smoothTake or nilOrSmoothTake
+        ---@param nilOrSmoothTake nil | boolean
+        ---@overload fun(nilOrSmoothTake: nil | number)
+        ---@overload fun(): any
+        function self.place(nilOrSmoothTake)
+            local smoothTake = (nilOrSmoothTake == nil) and config.smoothTake or nilOrSmoothTake
 
-			return TableUtils.map(entries, function(_, guid)
-				self.placeEntry(guid, smoothTake)
-				return guid
-			end)
-		end
+            return TableUtils.map(entries, function(_, guid)
+                self.placeEntry(guid, smoothTake)
+                return guid
+            end)
+        end
 
-		function self.recall()
-			TableUtils.map(entries, function(_, guid)
-				self.recallEntry(guid)
-				return guid
-			end)
-		end
+        function self.recall()
+            TableUtils.map(entries, function(_, guid)
+                self.recallEntry(guid)
+                return guid
+            end)
+        end
 
-		return self
-	end,
-	__index = Instance,
+        return self
+    end,
+    __index = Instance,
 }))
 
 return MemBagInstance

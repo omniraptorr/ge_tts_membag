@@ -1,10 +1,94 @@
 local TableUtils = require('ge_tts/TableUtils')
+local MemBagInstance = require("MemBag/MemBag")
 
----@class GUIMemBagInstance : MemBagInstance
+---@class GUIBagInstance : MemBagInstance
 
----@shape PendingMemBagEntry: MemBagEntry
+---@class static_GUIBagInstance : static_MemBagInstance
+---@overload fun(savedState: MemBagInstance_SavedState): GUIBagInstance
+---@overload fun(object: tts__Container): GUIBagInstance
+---@overload fun(object: tts__Container, entries: nil | entries): GUIBagInstance
+---@overload fun(object: tts__Container, entries: nil | entries, pending: nil | pendingEntries): GUIBagInstance
+---@overload fun(object: tts__Container, entries: nil | entries, pending: nil | pendingEntries, config: MemBagConfig): GUIBagInstance
+local GUIBagInstance = {}
+
+---@shape PendingBagEntry: MemBagEntry
 ---@field blinkID number
 
----@shape GUIMemBagConfig: MemBagConfig
+---@shape GUIBagConfig: MemBagConfig
 ---@field gui nil | boolean
 
+---@alias pendingEntries table<string, PendingBagEntry>
+
+---@shape GUIBagInstance_SavedState : MemBagInstance_SavedState
+---@field pending pendingEntries
+---@field config GUIBagConfig
+
+GUIBagInstance.INSTANCE_TYPE = "GUI MemBag"
+
+GUIBagInstance.defaultConfig = TableUtils.merge(MemBagInstance.defaultConfig, {
+    gui = true
+})
+local configMeta = { __index = GUIBagInstance.defaultConfig }
+
+local function isContainer(obj)
+    return type(obj) == "userdata" and obj.tag == "Bag" or obj.tag == "Deck"
+end
+
+setmetatable(GUIBagInstance, TableUtils.merge(getmetatable(MemBagInstance), {
+    ---@param objOrGUIDOrSavedState tts__Object | string | GUIBagInstance_SavedState
+    ---@param nilOrDataOrContainer nil | tts__Container
+    __call = function(_, objOrGUIDOrSavedState, nilOrDataOrContainer, nilOrData)
+        ---@type MemBagInstance
+        local self
+
+        -- instance private variables go here
+        ---@type entries
+        local entries -- will be assigned from parent
+        ---@type pendingEntries
+        local pending
+        ---@type GUIBagConfig
+        local config
+
+        -- handling the various overloads
+        if GUIBagInstance.isSavedState(objOrGUIDOrSavedState) then
+            local savedState = --[[---@type GUIBagInstance_SavedState]] objOrGUIDOrSavedState
+            self = --[[---@type GUIBagInstance]] MemBagInstance(savedState)
+            pending = savedState.pending
+        elseif type(objOrGUIDOrSavedState) == "string" and isContainer(nilOrDataOrContainer) and GUIBagInstance.checkValidData(nilOrData) then
+            local guid = --[[---@type string]] objOrGUIDOrSavedState
+            -- todo: fix these overloads
+            self = --[[---@type GUIBagInstance]] MemBagInstance(guid, --[[---@type tts__Container]] nilOrDataOrContainer)
+            pending = --[[---@type pendingEntries]] nilOrData
+        elseif type(objOrGUIDOrSavedState) == "userdata" and GUIBagInstance.checkValidData(nilOrDataOrContainer) then
+            self = --[[---@type GUIBagInstance]] MemBagInstance(--[[---@type tts__Object]] objOrGUIDOrSavedState)
+            pending = --[[---@type pendingEntries]] nilOrDataOrContainer
+        else
+            error("bad arguments to constructor!")
+        end
+
+        function self.getConfig()
+            return TableUtils.copy(config)
+        end
+
+        -- member functions go here
+
+        function self.getMyData()
+            return TableUtils.copy(pending)
+        end
+
+        return self
+    end,
+    __index = MemBagInstance,
+    -- other metamethods (e.g. arithmetic, pairs, etc) go here too.
+}))
+
+-- public class (i.e. not tied to an instance) functions go here
+function GUIBagInstance.checkValidData(data)
+    -- insert own data checking here
+    return type(data) == "nil" or
+            type(data) == "table" and
+                    TableUtils.isArray(data) and
+                    type(next(data)) == "number"
+end
+
+return GUIBagInstance

@@ -220,7 +220,6 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
 			Logger.assert(entries[guid], "no entry with guid " .. guid)
 			local entry = entries[guid]
 
-			-- todo: man handling default args is awkward. ask for feedback on style
 			local smoothTake = (nilOrSmoothTake == nil) and config.smoothTake or nilOrSmoothTake
 
 			local pos, rot = self.applyTransform(entry)

@@ -1,0 +1,1 @@
+This project uses [ge_tts](https://github.com/Benjamin-Dobell/ge_tts). The main file is MemBag.ttslua, all others will inherit from it even if they're borked now.

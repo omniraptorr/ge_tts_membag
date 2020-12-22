@@ -1,79 +1,210 @@
+local Instance = require("ge_tts/Instance")
 local TableUtils = require('ge_tts/TableUtils')
 local MemBagInstance = require("MemBag/MemBag")
+local Logger = require("ge_tts/Logger")
+
 
 ---@class GUIBagInstance : MemBagInstance
 
 ---@class static_GUIBagInstance : static_MemBagInstance
 ---@overload fun(savedState: MemBagInstance_SavedState): GUIBagInstance
 ---@overload fun(object: tts__Container): GUIBagInstance
----@overload fun(object: tts__Container, entries: nil | entries): GUIBagInstance
----@overload fun(object: tts__Container, entries: nil | entries, pending: nil | pendingEntries): GUIBagInstance
----@overload fun(object: tts__Container, entries: nil | entries, pending: nil | pendingEntries, config: MemBagConfig): GUIBagInstance
+---@overload fun(object: tts__Container, data: nil | GUIBagData): GUIBagInstance
 local GUIBagInstance = {}
 
----@shape PendingBagEntry: MemBagEntry
----@field blinkID number
-
----@shape GUIBagConfig: MemBagConfig
+---@shape PartialGUIBagConfig: MemBagConfig
 ---@field gui nil | boolean
+---@field blinkColor nil | tts__Color
+---@field containerBlinkColor nil | tts__Color
+---@field selfHighlightColor nil | tts__Color
+---@field blinkDuration nil | number
 
----@alias pendingEntries table<string, PendingBagEntry>
+-- this shape is just so luanalysis respects the default values accessed via __index
+---@shape GUIBagConfig: MemBagConfig
+---@field gui boolean
+---@field blinkColor tts__Color
+---@field containerBlinkColor tts__Color
+---@field selfHighlightColor tts__Color
+---@field blinkDuration number
+
+
+GUIBagInstance.INSTANCE_TYPE = "GUI MemBag"
+
+GUIBagInstance.defaultConfig = TableUtils.merge(MemBagInstance.defaultConfig, {
+    gui = true,
+    blinkColor = "Red",
+    containerBlinkColor = "Pink",
+    selfHighlightColor = "Blue",
+    blinkDuration = 0.5,
+})
+
+---@alias pendingEntries table<string, number>
 
 ---@shape GUIBagInstance_SavedState : MemBagInstance_SavedState
 ---@field pending pendingEntries
 ---@field config GUIBagConfig
 
-GUIBagInstance.INSTANCE_TYPE = "GUI MemBag"
+---@shape GUIBagData : MemBagData
+---@field pending nil | pendingEntries
+---@field config nil | PartialGUIBagConfig
 
-GUIBagInstance.defaultConfig = TableUtils.merge(MemBagInstance.defaultConfig, {
-    gui = true
-})
-local configMeta = { __index = GUIBagInstance.defaultConfig }
+GUIBagInstance.defaultConfig.__index = GUIBagInstance.defaultConfig
 
 local function isContainer(obj)
-    return type(obj) == "userdata" and obj.tag == "Bag" or obj.tag == "Deck"
+    return type(obj) == "userdata" and obj ~= nil and obj.tag == "Bag" or obj.tag == "Deck"
 end
 
 setmetatable(GUIBagInstance, TableUtils.merge(getmetatable(MemBagInstance), {
-    ---@param objOrGUIDOrSavedState tts__Object | string | GUIBagInstance_SavedState
-    ---@param nilOrDataOrContainer nil | tts__Container
-    __call = function(_, objOrGUIDOrSavedState, nilOrDataOrContainer, nilOrData)
-        ---@type MemBagInstance
+    ---@param objOrSavedState tts__Object | GUIBagInstance_SavedState
+    ---@param nilOrData nil | GUIBagData
+    __call = function(_, objOrSavedState, nilOrData)
+        ---@type GUIBagInstance
         local self
 
         -- instance private variables go here
-        ---@type entries
-        local entries -- will be assigned from parent
         ---@type pendingEntries
-        local pending
-        ---@type GUIBagConfig
-        local config
+        local pending = {}
 
-        -- handling the various overloads
-        if GUIBagInstance.isSavedState(objOrGUIDOrSavedState) then
-            local savedState = --[[---@type GUIBagInstance_SavedState]] objOrGUIDOrSavedState
-            self = --[[---@type GUIBagInstance]] MemBagInstance(savedState)
-            pending = savedState.pending
-        elseif type(objOrGUIDOrSavedState) == "string" and isContainer(nilOrDataOrContainer) and GUIBagInstance.checkValidData(nilOrData) then
-            local guid = --[[---@type string]] objOrGUIDOrSavedState
-            -- todo: fix these overloads
-            self = --[[---@type GUIBagInstance]] MemBagInstance(guid, --[[---@type tts__Container]] nilOrDataOrContainer)
-            pending = --[[---@type pendingEntries]] nilOrData
-        elseif type(objOrGUIDOrSavedState) == "userdata" and GUIBagInstance.checkValidData(nilOrDataOrContainer) then
-            self = --[[---@type GUIBagInstance]] MemBagInstance(--[[---@type tts__Object]] objOrGUIDOrSavedState)
-            pending = --[[---@type pendingEntries]] nilOrDataOrContainer
-        else
-            error("bad arguments to constructor!")
+        local config = setmetatable(--[[---@type GUIBagConfig]] {}, self.getDefaultConfig())
+
+        -- todo: figure out inheritance wrapper benjamin mentioned in discord
+        -- config functions need to be defined first because they're used in the constructor
+        function self.getDefaultConfig()
+            return GUIBagInstance.defaultConfig
         end
 
         function self.getConfig()
             return TableUtils.copy(config)
         end
 
-        -- member functions go here
+        ---@param newConfig PartialGUIBagConfig
+        function self.setConfig(newConfig)
+            config = --[[---@type GUIBagConfig]] setmetatable(newConfig, self.getDefaultConfig())
+        end
 
-        function self.getMyData()
-            return TableUtils.copy(pending)
+
+        -- handling the various overloads
+        if GUIBagInstance.isSavedState(objOrSavedState) then
+            local savedState = --[[---@type GUIBagInstance_SavedState]] objOrSavedState
+            self = --[[---@type GUIBagInstance]] MemBagInstance(savedState)
+            pending = savedState.pending -- if it's a savedState we can assign directly
+            self.setConfig(savedState.config)
+        elseif type(objOrSavedState) == "userdata" then
+            local obj = --[[---@type tts__Container]] objOrSavedState
+            Logger.assert(isContainer(obj), "tried to init GUIMemBag but object is not a valid container!")
+            self = --[[---@type GUIBagInstance]] MemBagInstance(obj, nilOrData)
+
+            if nilOrData then
+                local data = --[[---@not nil]] nilOrData
+                if data.pending then
+                    pending = --[[---@not nil]] data.pending
+                end
+                if data.config then
+                    self.setConfig( --[[---@not nil]] data.config)
+                end
+            end
+        end
+
+        local superSave = self.save
+
+        ---@return GUIBagInstance_SavedState
+        function self.save()
+            return --[[---@type GUIBagInstance_SavedState]] TableUtils.merge(superSave(), {
+                config = config,
+                pending = pending
+            })
+        end
+
+        ---@param guid string
+        local function blink(guid)
+            local realObj = (--[[---@not nil]] Instance.getInstance(guid)).getObject()
+            if guid == realObj.getGUID() then
+                realObj.highlightOn(config.blinkColor, config.blinkDuration)
+            else
+                realObj.highlightOn(config.containerBlinkColor, config.blinkDuration)
+            end
+        end
+
+        local function addBlinker(guid)
+            return Wait.time(function() blink(guid) end, config.blinkDuration * 2, -1)
+        end
+
+        ---@param guid string
+        function self.addPendingEntry(guid)
+            Logger.assert(not pending[guid], "entry already in pending!")
+            pending[guid] = addBlinker(guid)
+        end
+
+        function self.removePendingEntry(guid)
+            Logger.assert(pending[guid], "entry already not in pending!")
+            Wait.stop(pending[guid])
+            pending[guid] = nil
+        end
+
+        local function addEntryMapFunc(_, guid)
+            return self.addEntry(--[[---@not nil]] Instance.getInstance(guid))
+        end
+        function self.writePending()
+            self.clearEntries()
+            TableUtils.map(pending, addEntryMapFunc)
+        end
+
+        function self.finishSetup()
+            self.writePending()
+
+            local realObj = self.getObject()
+            realObj.highlightOff()
+            self.actionMode()
+        end
+
+
+        local function addBlinkerMapFunc(_, guid)
+            return addBlinker(guid)
+        end
+
+        ---@params data {}
+        function self.drawLabel()
+
+        end
+
+        function self.setupMode()
+            local realObj = self.getObject()
+            if config.selfHighlightColor then realObj.highlightOn(--[[---@not nil]] config.selfHighlightColor) end
+
+            if next(pending) then -- only when restoring from a save
+                Logger.log("restoring pending from a save", Logger.INFO)
+                pending = TableUtils.map(pending, addBlinkerMapFunc)
+            else -- add blinkers for everything
+                pending = TableUtils.map(self.getEntries(), addBlinkerMapFunc)
+            end
+
+
+        end
+
+        function self.actionMode()
+            local realObj = self.getObject()
+            realObj.clearContextMenu()
+
+            if next(self.getEntries()) then
+                realObj.addContextMenuItem("Place", self.place)
+                realObj.addContextMenuItem("Recall", self.recall)
+            end
+
+            realObj.addContextMenuItem("Setup", self.setupMode)
+        end
+
+        function self.drawUI()
+            local realObj = self.getObject()
+            if not config.gui or realObj.getGUID() ~= self.getInstanceGuid() then return end
+
+            if not next(pending) then
+                self.actionMode()
+            end
+
+        end
+
+        function self.onSpawned()
+
         end
 
         return self
@@ -81,14 +212,5 @@ setmetatable(GUIBagInstance, TableUtils.merge(getmetatable(MemBagInstance), {
     __index = MemBagInstance,
     -- other metamethods (e.g. arithmetic, pairs, etc) go here too.
 }))
-
--- public class (i.e. not tied to an instance) functions go here
-function GUIBagInstance.checkValidData(data)
-    -- insert own data checking here
-    return type(data) == "nil" or
-            type(data) == "table" and
-                    TableUtils.isArray(data) and
-                    type(next(data)) == "number"
-end
 
 return GUIBagInstance

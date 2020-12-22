@@ -8,8 +8,7 @@ local TableUtils = require('ge_tts/TableUtils')
 ---@class static_MemBagInstance : ge_tts__static_Instance
 ---@overload fun(savedState: MemBagInstance_SavedState): MemBagInstance
 ---@overload fun(object: tts__Container): MemBagInstance
----@overload fun(object: tts__Container, entries: nil | entries): MemBagInstance
----@overload fun(object: tts__Container, objects: nil | entries, config: MemBagConfig): MemBagInstance
+---@overload fun(object: tts__Container, data: nil | MemBagData): MemBagInstance
 local MemBagInstance = {}
 
 ---@shape MemBagEntry
@@ -18,14 +17,20 @@ local MemBagInstance = {}
 ---@field lock nil | boolean
 ---@field parent nil | string
 
----@alias entries table<string, MemBagEntry>
+---@alias MemBagEntries table<string, MemBagEntry>
 
 ---@shape MemBagConfig
 ---@field smoothTake nil | boolean
+---@field __index nil | table
 
+-- once we get multiple inheritance this will inherit from MemBagData as well. but for now just duplicate the fields.
 ---@shape MemBagInstance_SavedState : ge_tts__Instance_SavedState
----@field entries entries
----@field config MemBagConfig
+---@field entries MemBagEntries
+---@field config nil | MemBagConfig
+
+---@shape MemBagData
+---@field entries nil | MemBagEntries
+---@field config nil | MemBagConfig
 
 MemBagInstance.INSTANCE_TYPE = "Absolute MemBag"
 
@@ -33,67 +38,67 @@ MemBagInstance.INSTANCE_TYPE = "Absolute MemBag"
 MemBagInstance.defaultConfig = {
     smoothTake = true,
 }
-local configMeta = { __index = MemBagInstance.defaultConfig }
+MemBagInstance.defaultConfig.__index = MemBagInstance.defaultConfig
 
 setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
-    ---@param objOrSavedState tts__Container | CenteredMemBagInstance_SavedState
-    ---@param nilOrEntries nil | entries
-    ---@param nilOrConfig nil | MemBagConfig
-    __call = function(_, objOrSavedState, nilOrEntries, nilOrConfig)
+    ---@param objOrSavedState tts__Container | MemBagInstance_SavedState
+    ---@param nilOrNewData nil | MemBagData
+    __call = function(_, objOrSavedState, nilOrNewData)
         local self = --[[---@type MemBagInstance]] Instance(objOrSavedState) -- super constructor
 
-        ---@type entries
-        local entries
+        ---@type MemBagEntries
+        local entries = {}
         ---@type MemBagConfig
-        local config
+        local config = setmetatable({}, self.getDefaultConfig())
 
         ---@param entry MemBagEntry
         ---@param guid string
         ---@return ge_tts__Instance
         local function entryMapFunc(entry, guid)
-            return self.addEntry(guid, entry)
+            return self.addEntry(self.initInstance(guid), entry)
         end
 
-        local isSavedState = MemBagInstance.isSavedState(objOrSavedState)
-        if isSavedState then
-            local savedState = --[[---@type MemBagInstance_SavedState]] objOrSavedState
-
-            config = setmetatable(savedState.config, configMeta)
-            TableUtils.map(savedState.entries, entryMapFunc)
-        else
-            if nilOrEntries then
-                TableUtils.map(--[[---@not nil]] nilOrEntries, entryMapFunc)
-            else
-                entries = {}
-            end
-
-            if nilOrConfig then
-                config = setmetatable(TableUtils.copy(config), configMeta)
-            else
-                config = setmetatable({}, configMeta)
-            end
+        ---@type MemBagData
+        local newData
+        if MemBagInstance.isSavedState(objOrSavedState) then
+            newData = (--[[---@type MemBagInstance_SavedState]] objOrSavedState)
+        elseif type(nilOrNewData) == "table" then
+            newData = --[[---@not nil]] TableUtils.copy(nilOrNewData)
         end
+
+        if newData.config then
+            self.setConfig(newData.config)
+        end
+        if newData.entries then
+            TableUtils.map(--[[---@not nil]] newData.entries, entryMapFunc)
+        end
+
+        -- done with constructor, now to define public member functions
 
         local superSave = self.save
-
         ---@return MemBagInstance_SavedState
         function self.save()
-            -- ge_tts__Instance (our super class) has its own data that it needs to save. So we call
-            -- through to the original (super) save() method, and merge its result with our own data
-            -- i.e. our object entries
             return --[[---@type MemBagInstance_SavedState]] TableUtils.merge(superSave(), {
-                config = config,
                 entries = entries,
+                config = config
             })
+        end
+
+        self.getInstanceType()
+        self.getType()
+
+        function self.getDefaultConfig()
+            return MemBagInstance.defaultConfig
         end
 
         function self.getConfig()
             return TableUtils.copy(config)
         end
 
+        -- this needs to be overridden for each descendant that adds config fields since they all need new defaults.
         ---@param newConfig MemBagConfig
         function self.setConfig(newConfig)
-            config = setmetatable(TableUtils.copy(newConfig), configMeta)
+            config = setmetatable(TableUtils.copy(newConfig), self.getDefaultConfig())
         end
 
         ---@return string
@@ -108,15 +113,24 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
             return superGetObject()
         end
 
-        ---Fetches existing entry instance
+        ---Fetches existing entry data
         ---@param guid string
         ---@return nil | MemBagEntry
-        function self.getEntryData(guid)
+        function self.getEntry(guid)
             return TableUtils.copy(entries[guid], true)
         end
 
-        ---This is basically ripped from Instance constructor, i just added extra asserts cuz i'm paranoid
+        function self.getEntries()
+            return TableUtils.copy(entries)
+        end
+
+        function self.clearEntries()
+            entries = {}
+        end
+
+        ---This is basically ripped from Instance constructor, i just added extra asserts cuz i'm paranoid.
         ---Looks for guid in the scene and in container (or self if no container provided), then creates an Instance from it
+        ---@overload fun(guid: string): ge_tts__Instance
         ---@param guid string
         ---@param nilOrContainer nil | tts__Container
         ---@return ge_tts__Instance
@@ -182,19 +196,16 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
 
         ---Looks inside and outside self for matching object and makes an Instance for it, then adds it to entries.
         ---Errors if matching object does not exist either directly in the scene or inside selfObj.
+        ---@overload fun(entryInstance: ge_tts__Instance)
         ---@param entryInstance ge_tts__Instance
-        ---@param nilOrData nil | MemBagEntry
-        ---@return ge_tts__Instance
-        ---@overload fun(guid: string): ge_tts__Instance
-        ---@overload fun(guid: string, nilOrData: nil | MemBagEntry): ge_tts__Instance
-        function self.addEntry(entryInstance, nilOrData)
+        ---@param nilOrEntryData nil | MemBagEntry
+        function self.addEntry(entryInstance, nilOrEntryData)
             local entryObj = entryInstance.getObject()
             local guid = entryInstance.getInstanceGuid()
 
-            if nilOrData then
-                local data = TableUtils.copy(--[[---@not nil]] nilOrData)
-                data.pos, data.rot = self.getTransform(data.pos, data.rot)
-                entries[guid] = data
+            if nilOrEntryData then
+                -- when setting data directly, the transform step should be done in advance by the caller
+                entries[guid] = TableUtils.copy(--[[---@not nil]] nilOrEntryData)
             else
                 local pos, rot = self.getTransform(entryObj.getPosition(), entryObj.getRotation())
                 entries[guid] = {
@@ -205,7 +216,6 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
             end
 
             self.invalidateSavedState()
-            return entryInstance
         end
 
         ---@param guid string
@@ -214,9 +224,9 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
             self.invalidateSavedState()
         end
 
-        ---Caalled after placing an entry
+        --- callback after taking an entry and getting its obj reference. fancy animations etc. will go here
         ---@param entry ge_tts__Instance
-        function self.onPlace(entry)
+        function self.onEntryPlace(entry)
             local lock = entries[entry.getInstanceGuid()].lock or false
             entry.getObject().setLock(lock)
         end
@@ -241,14 +251,14 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
                 rotation = rot,
                 smooth = smoothTake,
                 callback = function()
-                    return self.onPlace(entryInstance)
+                    return self.onEntryPlace(entryInstance)
                 end,
             }
             entryInstance.takeObject(params)
         end
 
         ---@param entryInstance ge_tts__Instance
-        function self.onRecall(entryInstance)
+        function self.onEntryRecall(entryInstance)
             self.getObject().putObject(entryInstance.getObject())
         end
 
@@ -263,9 +273,9 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
             local params = {
                 guid = guid,
                 position = entryInstance.getObject().getPosition() + Vector(0, 1, 0),
-                smooth = false,
+                smooth = false, -- smooth is always false here because any fanciness should happen in the callback
                 callback = function()
-                    self.onRecall(entryInstance)
+                    self.onEntryRecall(entryInstance)
                 end
             }
             entryInstance.takeObject(params)

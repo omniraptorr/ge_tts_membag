@@ -169,7 +169,7 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(LabeledInstance), {
                 if LabeledInstance.isSavedState(decodedState) then
                     return LabeledInstance(--[[---@type ge_tts__Instance_SavedState]] decodedState)
                 else
-                    return LabeledInstance(guid, nilOrContainer)
+                    return LabeledInstance(guid, --[[---@not nil]] nilOrContainer)
                 end
             end
         end

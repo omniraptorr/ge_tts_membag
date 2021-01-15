@@ -1,6 +1,6 @@
 local Instance = require("ge_tts/Instance")
 local TableUtils = require('ge_tts/TableUtils')
-local MemBagInstance = require("MemBag/MemBag")
+local MemBagInstance = require("MemBag")
 local Logger = require("ge_tts/Logger")
 
 
@@ -38,7 +38,7 @@ GUIBagInstance.defaultConfig = TableUtils.merge(MemBagInstance.defaultConfig, {
     blinkDuration = 0.5,
 })
 
----@alias pendingEntries table<string, number>
+---@alias pendingEntries table<string, number> @ a table of blink Wait.time IDs indexed by guid
 
 ---@shape GUIBagInstance_SavedState : MemBagInstance_SavedState
 ---@field pending pendingEntries
@@ -50,6 +50,7 @@ GUIBagInstance.defaultConfig = TableUtils.merge(MemBagInstance.defaultConfig, {
 
 GUIBagInstance.defaultConfig.__index = GUIBagInstance.defaultConfig
 
+---@param obj tts__Object
 local function isContainer(obj)
     return type(obj) == "userdata" and obj ~= nil and obj.tag == "Bag" or obj.tag == "Deck"
 end
@@ -67,8 +68,18 @@ setmetatable(GUIBagInstance, TableUtils.merge(getmetatable(MemBagInstance), {
 
         local config = setmetatable(--[[---@type GUIBagConfig]] {}, self.getDefaultConfig())
 
-        -- todo: figure out inheritance wrapper benjamin mentioned in discord
-        -- config functions need to be defined first because they're used in the constructor
+        -- handling the various overloads
+        local isSavedState = GUIBagInstance.isSavedState(objOrSavedState)
+        if isSavedState then
+            self = --[[---@type GUIBagInstance]] MemBagInstance(--[[---@type GUIBagInstance_SavedState]] objOrSavedState)
+        elseif type(objOrSavedState) == "userdata" then
+            local obj = --[[---@type tts__Container]] objOrSavedState
+            Logger.assert(isContainer(obj), "tried to init GUIMemBag but object is not a valid container!")
+            self = --[[---@type GUIBagInstance]] MemBagInstance(obj, nilOrData)
+        end
+
+        -- todo: figure out inheritance wrapper benjamin mentioned in discord.
+        -- since inheriting static methods/vars is awkward boilerplate rn. and you have to define config methods in the middle of the constructor
         function self.getDefaultConfig()
             return GUIBagInstance.defaultConfig
         end
@@ -82,18 +93,12 @@ setmetatable(GUIBagInstance, TableUtils.merge(getmetatable(MemBagInstance), {
             config = --[[---@type GUIBagConfig]] setmetatable(newConfig, self.getDefaultConfig())
         end
 
-
-        -- handling the various overloads
-        if GUIBagInstance.isSavedState(objOrSavedState) then
+        -- now we finish the constructor
+        if isSavedState then
             local savedState = --[[---@type GUIBagInstance_SavedState]] objOrSavedState
-            self = --[[---@type GUIBagInstance]] MemBagInstance(savedState)
             pending = savedState.pending -- if it's a savedState we can assign directly
             self.setConfig(savedState.config)
         elseif type(objOrSavedState) == "userdata" then
-            local obj = --[[---@type tts__Container]] objOrSavedState
-            Logger.assert(isContainer(obj), "tried to init GUIMemBag but object is not a valid container!")
-            self = --[[---@type GUIBagInstance]] MemBagInstance(obj, nilOrData)
-
             if nilOrData then
                 local data = --[[---@not nil]] nilOrData
                 if data.pending then
@@ -105,8 +110,9 @@ setmetatable(GUIBagInstance, TableUtils.merge(getmetatable(MemBagInstance), {
             end
         end
 
-        local superSave = self.save
+        -- then methods
 
+        local superSave = self.save
         ---@return GUIBagInstance_SavedState
         function self.save()
             return --[[---@type GUIBagInstance_SavedState]] TableUtils.merge(superSave(), {
@@ -115,6 +121,7 @@ setmetatable(GUIBagInstance, TableUtils.merge(getmetatable(MemBagInstance), {
             })
         end
 
+        -- not used except as callback
         ---@param guid string
         local function blink(guid)
             local realObj = (--[[---@not nil]] Instance.getInstance(guid)).getObject()
@@ -125,6 +132,8 @@ setmetatable(GUIBagInstance, TableUtils.merge(getmetatable(MemBagInstance), {
             end
         end
 
+        -- not used except as callback
+        ---@param guid string
         local function addBlinker(guid)
             return Wait.time(function() blink(guid) end, config.blinkDuration * 2, -1)
         end
@@ -133,31 +142,38 @@ setmetatable(GUIBagInstance, TableUtils.merge(getmetatable(MemBagInstance), {
         function self.addPendingEntry(guid)
             Logger.assert(not pending[guid], "entry already in pending!")
             pending[guid] = addBlinker(guid)
+            return pending[guid]
         end
 
+        ---@param guid string
         function self.removePendingEntry(guid)
             Logger.assert(pending[guid], "entry already not in pending!")
             Wait.stop(pending[guid])
             pending[guid] = nil
         end
 
-        local function addEntryMapFunc(_, guid)
-            return self.addEntry(--[[---@not nil]] Instance.getInstance(guid))
+        function self.clearPendingEntries()
+            pending = {}
         end
-        function self.writePending()
-            self.clearEntries()
-            TableUtils.map(pending, addEntryMapFunc)
+
+        function self.writePendingEntries()
+            TableUtils.map(pending, function(_, guid)
+                local instance = --[[---@not nil]] Instance.getInstance(guid)
+                Logger.assert(instance,"error writing pending entry: object with guid " .. guid .. "has no instance")
+                return self.addEntry(instance)
+            end)
         end
 
         function self.finishSetup()
-            self.writePending()
+            self.clearEntries()
+            self.writePendingEntries()
 
             local realObj = self.getObject()
             realObj.highlightOff()
             self.actionMode()
         end
 
-
+        ---@param guid string
         local function addBlinkerMapFunc(_, guid)
             return addBlinker(guid)
         end
@@ -178,7 +194,7 @@ setmetatable(GUIBagInstance, TableUtils.merge(getmetatable(MemBagInstance), {
                 pending = TableUtils.map(self.getEntries(), addBlinkerMapFunc)
             end
 
-
+            self.createLabel()
         end
 
         function self.actionMode()

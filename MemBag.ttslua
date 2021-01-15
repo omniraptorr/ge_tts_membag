@@ -1,11 +1,11 @@
 local Json = require("ge_tts/Json")
 local Logger = require("ge_tts/Logger")
-local Instance = require("ge_tts/Instance")
+local LabeledInstance = require("UIUtils/LabeledInstance")
 local TableUtils = require('ge_tts/TableUtils')
 
----@class MemBagInstance : ge_tts__Instance
+---@class MemBagInstance : LabelInstance
 
----@class static_MemBagInstance : ge_tts__static_Instance
+---@class static_MemBagInstance : static_LabelInstance
 ---@overload fun(savedState: MemBagInstance_SavedState): MemBagInstance
 ---@overload fun(object: tts__Container): MemBagInstance
 ---@overload fun(object: tts__Container, data: nil | MemBagData): MemBagInstance
@@ -24,7 +24,7 @@ local MemBagInstance = {}
 ---@field __index nil | table
 
 -- once we get multiple inheritance this will inherit from MemBagData as well. but for now just duplicate the fields.
----@shape MemBagInstance_SavedState : ge_tts__Instance_SavedState
+---@shape MemBagInstance_SavedState : LabelInstance_SavedState
 ---@field entries MemBagEntries
 ---@field config nil | MemBagConfig
 
@@ -40,37 +40,33 @@ MemBagInstance.defaultConfig = {
 }
 MemBagInstance.defaultConfig.__index = MemBagInstance.defaultConfig
 
-setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
+setmetatable(MemBagInstance, TableUtils.merge(getmetatable(LabeledInstance), {
     ---@param objOrSavedState tts__Container | MemBagInstance_SavedState
-    ---@param nilOrNewData nil | MemBagData
-    __call = function(_, objOrSavedState, nilOrNewData)
-        local self = --[[---@type MemBagInstance]] Instance(objOrSavedState) -- super constructor
+    ---@param nilOrBagData nil | MemBagData
+    __call = function(_, objOrSavedState, nilOrBagData)
+
+        local self = --[[---@type MemBagInstance]] LabeledInstance(objOrSavedState)
 
         ---@type MemBagEntries
         local entries = {}
         ---@type MemBagConfig
         local config = setmetatable({}, self.getDefaultConfig())
 
-        ---@param entry MemBagEntry
-        ---@param guid string
-        ---@return ge_tts__Instance
-        local function entryMapFunc(entry, guid)
-            return self.addEntry(self.initInstance(guid), entry)
-        end
-
         ---@type MemBagData
-        local newData
+        local bagData
         if MemBagInstance.isSavedState(objOrSavedState) then
-            newData = (--[[---@type MemBagInstance_SavedState]] objOrSavedState)
-        elseif type(nilOrNewData) == "table" then
-            newData = --[[---@not nil]] TableUtils.copy(nilOrNewData)
+            bagData = (--[[---@type MemBagInstance_SavedState]] objOrSavedState)
+        elseif type(nilOrBagData) == "table" then
+            bagData = --[[---@not nil]] TableUtils.copy(nilOrBagData)
         end
 
-        if newData.config then
-            self.setConfig(newData.config)
+        if bagData.config then
+            self.setConfig( --[[---@not nil]] bagData.config)
         end
-        if newData.entries then
-            TableUtils.map(--[[---@not nil]] newData.entries, entryMapFunc)
+        if bagData.entries then
+            TableUtils.map(--[[---@not nil]] bagData.entries, function(entry, guid)
+                return self.addEntry(self.initInstance(guid), entry)
+            end)
         end
 
         -- done with constructor, now to define public member functions
@@ -135,7 +131,7 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
         ---@param nilOrContainer nil | tts__Container
         ---@return ge_tts__Instance
         function self.initInstance(guid, nilOrContainer)
-            local existingInstance = Instance.getInstance(guid)
+            local existingInstance = LabeledInstance.getInstance(guid)
             if existingInstance then
                 return --[[---@not nil]] existingInstance
             end
@@ -161,19 +157,19 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
             if nilOrObj then
                 local obj = --[[---@not nil]] nilOrObj
                 local decodedState = Json.decode(--[[---@not nil]] obj.script_state)
-                if Instance.isSavedState(decodedState) then
-                    return Instance(--[[---@type ge_tts__Instance_SavedState]] decodedState)
+                if LabeledInstance.isSavedState(decodedState) then
+                    return LabeledInstance(--[[---@type ge_tts__Instance_SavedState]] decodedState)
                 else
-                    return Instance(obj)
+                    return LabeledInstance(obj)
                 end
             else
                 -- then nilOrState exists
                 local state = --[[---@not nil]] nilOrState
                 local decodedState = Json.decode(--[[---@not nil]] state.lua_script_state)
-                if Instance.isSavedState(decodedState) then
-                    return Instance(--[[---@type ge_tts__Instance_SavedState]] decodedState)
+                if LabeledInstance.isSavedState(decodedState) then
+                    return LabeledInstance(--[[---@type ge_tts__Instance_SavedState]] decodedState)
                 else
-                    return Instance(guid, nilOrContainer)
+                    return LabeledInstance(guid, nilOrContainer)
                 end
             end
         end
@@ -216,6 +212,8 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
             end
 
             self.invalidateSavedState()
+
+            return entries[guid]
         end
 
         ---@param guid string
@@ -241,7 +239,7 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
 
             local pos, rot = self.applyTransform(entry)
 
-            local entryInstance = --[[---@not nil]] Instance.getInstance(guid)
+            local entryInstance = --[[---@not nil]] LabeledInstance.getInstance(guid)
             Logger.assert(entryInstance, "instance for entry " .. guid .. " not found!")
 
             ---@type ge_tts__Instance_TakeObjectOptions
@@ -266,7 +264,7 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
         function self.recallEntry(guid)
             ---@type nil | number
 
-            local entryInstance = --[[---@not nil]] Instance.getInstance(guid)
+            local entryInstance = --[[---@not nil]] LabeledInstance.getInstance(guid)
             Logger.assert(entryInstance, self.getInstanceGuid() .. " tried to recall a non-existing instance of guid " .. guid)
 
             ---@type ge_tts__Instance_TakeObjectOptions
@@ -302,7 +300,7 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(Instance), {
 
         return self
     end,
-    __index = Instance,
+    __index = LabeledInstance,
 }))
 
 return MemBagInstance

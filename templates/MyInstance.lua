@@ -21,8 +21,9 @@ local MyInstance = {}
 MyInstance.INSTANCE_TYPE = "My Instance Type"
 
 -- private functions go here as local functions so they won't show up in the return
+---@param obj any
 local function isContainer(obj)
-    return type(obj) == "userdata" and obj.tag == "Bag" or obj.tag == "Deck"
+    return type(obj) == "userdata" and (--[[---@type tts__Object]] obj).tag == "Bag" or (--[[---@type tts__Object]] obj).tag == "Deck"
 end
 
 setmetatable(MyInstance, TableUtils.merge((Instance), {

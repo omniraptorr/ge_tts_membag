@@ -1,6 +1,6 @@
 local Json = require("ge_tts/Json")
 local Logger = require("ge_tts/Logger")
-local LabeledInstance = require("UIUtils/LabeledInstance")
+local LabelInstance = require("UIUtils/LabelInstance")
 local TableUtils = require('ge_tts/TableUtils')
 
 ---@class MemBagInstance : LabelInstance
@@ -15,16 +15,19 @@ local MemBagInstance = {}
 ---@field pos tts__Vector
 ---@field rot tts__Vector
 ---@field lock nil | boolean
----@field parent nil | string
 
 ---@alias MemBagEntries table<string, MemBagEntry>
 
 ---@shape MemBagConfig
 ---@field smoothTake nil | boolean
+
+
+---@shape FullMemBagConfig : MemBagConfig
+---@field smoothTake boolean
 ---@field __index nil | table
 
 -- once we get multiple inheritance this will inherit from MemBagData as well. but for now just duplicate the fields.
----@shape MemBagInstance_SavedState : LabelInstance_SavedState
+---@shape MemBagInstance_SavedState : ge_tts__Instance_SavedState
 ---@field entries MemBagEntries
 ---@field config nil | MemBagConfig
 
@@ -34,23 +37,31 @@ local MemBagInstance = {}
 
 MemBagInstance.INSTANCE_TYPE = "Absolute MemBag"
 
----@type MemBagConfig
-MemBagInstance.defaultConfig = {
-    smoothTake = true,
-}
-MemBagInstance.defaultConfig.__index = MemBagInstance.defaultConfig
+function MemBagInstance.getDefaultConfig()
+    return MemBagInstance.defaultConfig
+end
 
-setmetatable(MemBagInstance, TableUtils.merge(getmetatable(LabeledInstance), {
+local configMeta = {__index = MemBagInstance.getDefaultConfig()}
+
+---@generic C : FullMemBagConfig
+---@param config C
+function MemBagInstance:setDefaultConfig(config)
+    print("hi")
+    self.defaultConfig = setmetatable(config, getmetatable(self).__index.defaultConfig)
+end
+
+
+setmetatable(MemBagInstance, TableUtils.merge(getmetatable(LabelInstance), {
     ---@param objOrSavedState tts__Container | MemBagInstance_SavedState
     ---@param nilOrBagData nil | MemBagData
     __call = function(_, objOrSavedState, nilOrBagData)
 
-        local self = --[[---@type MemBagInstance]] LabeledInstance(objOrSavedState)
+        local self = --[[---@type MemBagInstance]] LabelInstance(objOrSavedState)
 
         ---@type MemBagEntries
         local entries = {}
         ---@type MemBagConfig
-        local config = setmetatable({}, self.getDefaultConfig())
+        local config = setmetatable({}, MemBagInstance.getDefaultConfig())
 
         ---@type MemBagData
         local bagData
@@ -60,13 +71,25 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(LabeledInstance), {
             bagData = --[[---@not nil]] TableUtils.copy(nilOrBagData)
         end
 
-        if bagData.config then
-            self.setConfig( --[[---@not nil]] bagData.config)
+        function self.getConfig()
+            return config
         end
-        if bagData.entries then
-            TableUtils.map(--[[---@not nil]] bagData.entries, function(entry, guid)
-                return self.addEntry(self.initInstance(guid), entry)
-            end)
+
+        -- this needs to be overridden for each descendant that adds config fields since they all need new defaults.
+        ---@param newConfig MemBagConfig
+        function self.setConfig(newConfig)
+            config = setmetatable(TableUtils.copy(newConfig), MemBagInstance.getDefaultConfig())
+        end
+
+        if bagData then
+            if bagData.config then
+                self.setConfig( --[[---@not nil]] bagData.config)
+            end
+            if bagData.entries then
+                TableUtils.map(--[[---@not nil]] bagData.entries, function(entry, guid)
+                    return self.addEntry(self.initInstance(guid), entry)
+                end)
+            end 
         end
 
         -- done with constructor, now to define public member functions
@@ -78,23 +101,6 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(LabeledInstance), {
                 entries = entries,
                 config = config
             })
-        end
-
-        self.getInstanceType()
-        self.getType()
-
-        function self.getDefaultConfig()
-            return MemBagInstance.defaultConfig
-        end
-
-        function self.getConfig()
-            return TableUtils.copy(config)
-        end
-
-        -- this needs to be overridden for each descendant that adds config fields since they all need new defaults.
-        ---@param newConfig MemBagConfig
-        function self.setConfig(newConfig)
-            config = setmetatable(TableUtils.copy(newConfig), self.getDefaultConfig())
         end
 
         ---@return string
@@ -131,7 +137,7 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(LabeledInstance), {
         ---@param nilOrContainer nil | tts__Container
         ---@return ge_tts__Instance
         function self.initInstance(guid, nilOrContainer)
-            local existingInstance = LabeledInstance.getInstance(guid)
+            local existingInstance = LabelInstance.getInstance(guid)
             if existingInstance then
                 return --[[---@not nil]] existingInstance
             end
@@ -157,19 +163,19 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(LabeledInstance), {
             if nilOrObj then
                 local obj = --[[---@not nil]] nilOrObj
                 local decodedState = Json.decode(--[[---@not nil]] obj.script_state)
-                if LabeledInstance.isSavedState(decodedState) then
-                    return LabeledInstance(--[[---@type ge_tts__Instance_SavedState]] decodedState)
+                if LabelInstance.isSavedState(decodedState) then
+                    return LabelInstance(--[[---@type ge_tts__Instance_SavedState]] decodedState)
                 else
-                    return LabeledInstance(obj)
+                    return LabelInstance(obj)
                 end
             else
                 -- then nilOrState exists
                 local state = --[[---@not nil]] nilOrState
                 local decodedState = Json.decode(--[[---@not nil]] state.lua_script_state)
-                if LabeledInstance.isSavedState(decodedState) then
-                    return LabeledInstance(--[[---@type ge_tts__Instance_SavedState]] decodedState)
+                if LabelInstance.isSavedState(decodedState) then
+                    return LabelInstance(--[[---@type ge_tts__Instance_SavedState]] decodedState)
                 else
-                    return LabeledInstance(guid, --[[---@not nil]] nilOrContainer)
+                    return LabelInstance(guid, --[[---@not nil]] nilOrContainer)
                 end
             end
         end
@@ -239,7 +245,7 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(LabeledInstance), {
 
             local pos, rot = self.applyTransform(entry)
 
-            local entryInstance = --[[---@not nil]] LabeledInstance.getInstance(guid)
+            local entryInstance = --[[---@not nil]] LabelInstance.getInstance(guid)
             Logger.assert(entryInstance, "instance for entry " .. guid .. " not found!")
 
             ---@type ge_tts__Instance_TakeObjectOptions
@@ -264,7 +270,7 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(LabeledInstance), {
         function self.recallEntry(guid)
             ---@type nil | number
 
-            local entryInstance = --[[---@not nil]] LabeledInstance.getInstance(guid)
+            local entryInstance = --[[---@not nil]] LabelInstance.getInstance(guid)
             Logger.assert(entryInstance, self.getInstanceGuid() .. " tried to recall a non-existing instance of guid " .. guid)
 
             ---@type ge_tts__Instance_TakeObjectOptions
@@ -300,7 +306,12 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(LabeledInstance), {
 
         return self
     end,
-    __index = LabeledInstance,
+    __index = LabelInstance,
 }))
+
+
+MemBagInstance:setDefaultConfig({
+    smoothTake = true,
+})
 
 return MemBagInstance

@@ -12,43 +12,70 @@ local Logger = require("ge_tts/Logger")
 ---@overload fun(object: tts__Container, data: nil | GUIBagData): GUIBagInstance
 local GUIBagInstance = {}
 
----@shape PartialGUIBagConfig: MemBagConfig
----@field gui nil | boolean
----@field blinkColor nil | tts__Color
----@field containerBlinkColor nil | tts__Color
----@field selfHighlightColor nil | tts__Color
----@field blinkDuration nil | number
-
--- this shape is just so luanalysis respects the default values accessed via __index
 ---@shape GUIBagConfig: MemBagConfig
----@field gui boolean
----@field blinkColor tts__Color
----@field containerBlinkColor tts__Color
----@field selfHighlightColor tts__Color
----@field blinkDuration number
+---@field gui nil | boolean
+---@field blinkColor nil | color
+---@field containerBlinkColor nil | color
+---@field selfHighlightColor nil | color
+---@field blinkDuration nil | number
+---@field defaultLabelConfig nil | LabelParams
 
+-- used for default config
+---@shape FullGUIBagConfig: GUIBagConfig
+---@field gui boolean
+---@field blinkColor color
+---@field containerBlinkColor color
+---@field selfHighlightColor color
+---@field blinkDuration number
+---@field labelConfig LabelParams
 
 GUIBagInstance.INSTANCE_TYPE = "GUI MemBag"
 
-GUIBagInstance.defaultConfig = TableUtils.merge(MemBagInstance.defaultConfig, {
+
+-- todo: re-enable illegal method override inspection and ask how to do this (override with child shape type). they should be compatible!
+function GUIBagInstance.getDefaultConfig()
+    return TableUtils.copy(GUIBagInstance.defaultConfig)
+end
+
+-- todo: not sure if this should be a ref or a copy tbh. probably ref
+--local defaultConfigMeta = { __index = MemBagInstance.getDefaultConfig()}
+local defaultConfigMeta = { __index = MemBagInstance.defaultConfig }
+
+local configMeta = { __index = GUIBagInstance.defaultConfig }
+
+---@param config FullGUIBagConfig
+function GUIBagInstance.setDefaultConfig(config)
+    GUIBagInstance.defaultConfig = setmetatable(TableUtils.merge(MemBagInstance.defaultConfig, config), defaultConfigMeta) -- todo: this is what needs to be wrapped for easier inheritance
+end
+
+---@type LabelParams
+local labelConfig = {
+    color = "Blue",
+    label = "",
+    font_color = "Black",
+    position = {1,0},
+    align = {1,0},
+    scale = 2,
+}
+
+GUIBagInstance.setDefaultConfig( --[[---@type FullGUIBagConfig]] TableUtils.merge(MemBagInstance.defaultConfig, {
     gui = true,
     blinkColor = "Red",
     containerBlinkColor = "Pink",
     selfHighlightColor = "Blue",
     blinkDuration = 0.5,
-})
+    labelConfig = labelConfig,
+}))
 
 ---@alias pendingEntries table<string, number> @ a table of blink Wait.time IDs indexed by guid
 
 ---@shape GUIBagInstance_SavedState : MemBagInstance_SavedState
----@field pending pendingEntries
----@field config GUIBagConfig
+---@field pending nil | pendingEntries
+---@field config nil | GUIBagConfig
 
 ---@shape GUIBagData : MemBagData
 ---@field pending nil | pendingEntries
----@field config nil | PartialGUIBagConfig
-
-GUIBagInstance.defaultConfig.__index = GUIBagInstance.defaultConfig
+---@field config nil | GUIBagConfig
 
 ---@param obj tts__Object
 local function isContainer(obj)
@@ -66,7 +93,7 @@ setmetatable(GUIBagInstance, TableUtils.merge(getmetatable(MemBagInstance), {
         ---@type pendingEntries
         local pending = {}
 
-        local config = setmetatable(--[[---@type GUIBagConfig]] {}, self.getDefaultConfig())
+        local config = --[[---@type FullGUIBagConfig]] setmetatable({}, configMeta)
 
         -- handling the various overloads
         local isSavedState = GUIBagInstance.isSavedState(objOrSavedState)
@@ -76,28 +103,30 @@ setmetatable(GUIBagInstance, TableUtils.merge(getmetatable(MemBagInstance), {
             local obj = --[[---@type tts__Container]] objOrSavedState
             Logger.assert(isContainer(obj), "tried to init GUIMemBag but object is not a valid container!")
             self = --[[---@type GUIBagInstance]] MemBagInstance(obj, nilOrData)
+        else
+            error("bad arguments to GUIMemBag constructor")
         end
 
-        -- todo: figure out inheritance wrapper benjamin mentioned in discord.
-        -- since inheriting static methods/vars is awkward boilerplate rn. and you have to define config methods in the middle of the constructor
-        function self.getDefaultConfig()
-            return GUIBagInstance.defaultConfig
-        end
-
+        -- todo: figure out inheritance wrapper benjamin mentioned in discord. fairly low priority
+        -- b/c inheriting static methods/vars is awkward boilerplate rn. and you have to define config methods in the middle of the constructor before you can finish assigning things.
         function self.getConfig()
             return TableUtils.copy(config)
         end
 
-        ---@param newConfig PartialGUIBagConfig
+        ---@param newConfig GUIBagConfig
         function self.setConfig(newConfig)
-            config = --[[---@type GUIBagConfig]] setmetatable(newConfig, self.getDefaultConfig())
+            config = --[[---@type FullGUIBagConfig]] setmetatable(newConfig, configMeta)
         end
 
         -- now we finish the constructor
         if isSavedState then
             local savedState = --[[---@type GUIBagInstance_SavedState]] objOrSavedState
-            pending = savedState.pending -- if it's a savedState we can assign directly
-            self.setConfig(savedState.config)
+            if savedState.pending then
+                pending = --[[---@not nil]] savedState.pending
+            end
+            if savedState.config then
+                self.setConfig(--[[---@not nil]] savedState.config)
+            end
         elseif type(objOrSavedState) == "userdata" then
             if nilOrData then
                 local data = --[[---@not nil]] nilOrData
@@ -116,8 +145,8 @@ setmetatable(GUIBagInstance, TableUtils.merge(getmetatable(MemBagInstance), {
         ---@return GUIBagInstance_SavedState
         function self.save()
             return --[[---@type GUIBagInstance_SavedState]] TableUtils.merge(superSave(), {
-                config = config,
-                pending = pending
+                config = next(--[[---@type table]] config) and config or nil, -- todo: ask why this errors without the cast. not allowed to call next() on shapes with fields?
+                pending = next(pending) and pending or nil,
             })
         end
 
@@ -125,10 +154,16 @@ setmetatable(GUIBagInstance, TableUtils.merge(getmetatable(MemBagInstance), {
         ---@param guid string
         local function blink(guid)
             local realObj = (--[[---@not nil]] Instance.getInstance(guid)).getObject()
+            if realObj == nil then
+                self.removePendingEntry(guid)
+                Logger.log("pending obj with guid " .. guid .. " has been deleted!")
+                return
+            end
             if guid == realObj.getGUID() then
-                realObj.highlightOn(config.blinkColor, config.blinkDuration)
+                -- todo: submit pr to fix color shape params in tts-types, then remove all the casts to tts__Color
+                realObj.highlightOn(--[[---@type tts__Color]] config.blinkColor, config.blinkDuration)
             else
-                realObj.highlightOn(config.containerBlinkColor, config.blinkDuration)
+                realObj.highlightOn(--[[---@type tts__Color]] config.containerBlinkColor, config.blinkDuration)
             end
         end
 
@@ -140,7 +175,7 @@ setmetatable(GUIBagInstance, TableUtils.merge(getmetatable(MemBagInstance), {
 
         ---@param guid string
         function self.addPendingEntry(guid)
-            Logger.assert(not pending[guid], "entry already in pending!")
+            --Logger.assert(not pending[guid], "entry already in pending!")
             pending[guid] = addBlinker(guid)
             return pending[guid]
         end
@@ -150,9 +185,13 @@ setmetatable(GUIBagInstance, TableUtils.merge(getmetatable(MemBagInstance), {
             Logger.assert(pending[guid], "entry already not in pending!")
             Wait.stop(pending[guid])
             pending[guid] = nil
+            return nil -- otherwise TableUtils.map complains about return type void :(
         end
 
         function self.clearPendingEntries()
+            TableUtils.map(pending, function(_, guid)
+                return self.removePendingEntry(guid)
+            end)
             pending = {}
         end
 
@@ -168,8 +207,13 @@ setmetatable(GUIBagInstance, TableUtils.merge(getmetatable(MemBagInstance), {
             self.clearEntries()
             self.writePendingEntries()
 
-            local realObj = self.getObject()
-            realObj.highlightOff()
+            self.getObject().highlightOff()
+            self.actionMode()
+        end
+
+        function self.cancelSetup()
+            self.clearPendingEntries()
+            self.getObject().highlightOff()
             self.actionMode()
         end
 
@@ -178,14 +222,15 @@ setmetatable(GUIBagInstance, TableUtils.merge(getmetatable(MemBagInstance), {
             return addBlinker(guid)
         end
 
-        ---@params data {}
-        function self.drawLabel()
-
+        function self.reset()
+            self.clearPendingEntries()
+            self.clearEntries()
+            self.setupMode()
         end
 
         function self.setupMode()
             local realObj = self.getObject()
-            if config.selfHighlightColor then realObj.highlightOn(--[[---@not nil]] config.selfHighlightColor) end
+            if config.selfHighlightColor then realObj.highlightOn(--[[---@type tts__Color]] config.selfHighlightColor) end
 
             if next(pending) then -- only when restoring from a save
                 Logger.log("restoring pending from a save", Logger.INFO)
@@ -194,7 +239,20 @@ setmetatable(GUIBagInstance, TableUtils.merge(getmetatable(MemBagInstance), {
                 pending = TableUtils.map(self.getEntries(), addBlinkerMapFunc)
             end
 
-            self.createLabel()
+            self.setLabel({
+                label = "Save selection",
+                click_function = self.finishSetup,
+                position = {1,1},
+                align = {1,-1}
+            })
+            self.setLabel({
+                label = "Cancel setup",
+                click_function = self.cancelSetup,
+                position = {1,0},
+                align = {1,-1}
+            })
+
+            realObj.addContextMenuItem("reset", self.reset)
         end
 
         function self.actionMode()
@@ -209,18 +267,10 @@ setmetatable(GUIBagInstance, TableUtils.merge(getmetatable(MemBagInstance), {
             realObj.addContextMenuItem("Setup", self.setupMode)
         end
 
-        function self.drawUI()
-            local realObj = self.getObject()
-            if not config.gui or realObj.getGUID() ~= self.getInstanceGuid() then return end
-
-            if not next(pending) then
-                self.actionMode()
-            end
-
-        end
-
-        function self.onSpawned()
-
+        if next(pending) then
+            self.setupMode()
+        else
+            self.actionMode()
         end
 
         return self

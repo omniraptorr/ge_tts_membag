@@ -1,6 +1,6 @@
 require("MemBag/filterInstanceContainers")
 
-local MemBag = require("MemBag/MemBag")
+local MemBag = require("MemBag")
 
 function onLoad(save_state)
     local bagObj = --[[---@type tts__Container]] getObjectFromGUID("222a81")

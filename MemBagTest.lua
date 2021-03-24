@@ -8,6 +8,7 @@ end
 
 function onLoad()
     local bag = instanceFromGUID("222a81")
+    bag.setupMode()
     --local card = instanceFromGUID("4ea443")
     --local deck = instanceFromGUID("6e575e")
     --local tile = instanceFromGUID("0b75fa")

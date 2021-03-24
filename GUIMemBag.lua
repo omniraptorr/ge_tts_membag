@@ -1,6 +1,6 @@
 local Instance = require("ge_tts/Instance")
 local TableUtils = require('ge_tts/TableUtils')
-local MemBagInstance = require("MemBag")
+local   MemBagInstance = require("MemBag")
 local Logger = require("ge_tts/Logger")
 
 
@@ -18,10 +18,10 @@ local GUIBagInstance = {}
 ---@field containerBlinkColor nil | color
 ---@field selfHighlightColor nil | color
 ---@field blinkDuration nil | number
----@field defaultLabelConfig nil | LabelParams
+---@field labelConfig nil | LabelParams
 
 -- used for default config
----@shape FullGUIBagConfig: GUIBagConfig
+---@shape FullGUIBagConfig
 ---@field gui boolean
 ---@field blinkColor color
 ---@field containerBlinkColor color
@@ -30,42 +30,6 @@ local GUIBagInstance = {}
 ---@field labelConfig LabelParams
 
 GUIBagInstance.INSTANCE_TYPE = "GUI MemBag"
-
-
--- todo: re-enable illegal method override inspection and ask how to do this (override with child shape type). they should be compatible!
-function GUIBagInstance.getDefaultConfig()
-    return TableUtils.copy(GUIBagInstance.defaultConfig)
-end
-
--- todo: not sure if this should be a ref or a copy tbh. probably ref
---local defaultConfigMeta = { __index = MemBagInstance.getDefaultConfig()}
-local defaultConfigMeta = { __index = MemBagInstance.defaultConfig }
-
-local configMeta = { __index = GUIBagInstance.defaultConfig }
-
----@param config FullGUIBagConfig
-function GUIBagInstance.setDefaultConfig(config)
-    GUIBagInstance.defaultConfig = setmetatable(TableUtils.merge(MemBagInstance.defaultConfig, config), defaultConfigMeta) -- todo: this is what needs to be wrapped for easier inheritance
-end
-
----@type LabelParams
-local labelConfig = {
-    color = "Blue",
-    label = "",
-    font_color = "Black",
-    position = {1,0},
-    align = {1,0},
-    scale = 2,
-}
-
-GUIBagInstance.setDefaultConfig( --[[---@type FullGUIBagConfig]] TableUtils.merge(MemBagInstance.defaultConfig, {
-    gui = true,
-    blinkColor = "Red",
-    containerBlinkColor = "Pink",
-    selfHighlightColor = "Blue",
-    blinkDuration = 0.5,
-    labelConfig = labelConfig,
-}))
 
 ---@alias pendingEntries table<string, number> @ a table of blink Wait.time IDs indexed by guid
 
@@ -93,8 +57,6 @@ setmetatable(GUIBagInstance, TableUtils.merge(getmetatable(MemBagInstance), {
         ---@type pendingEntries
         local pending = {}
 
-        local config = --[[---@type FullGUIBagConfig]] setmetatable({}, configMeta)
-
         -- handling the various overloads
         local isSavedState = GUIBagInstance.isSavedState(objOrSavedState)
         if isSavedState then
@@ -105,17 +67,6 @@ setmetatable(GUIBagInstance, TableUtils.merge(getmetatable(MemBagInstance), {
             self = --[[---@type GUIBagInstance]] MemBagInstance(obj, nilOrData)
         else
             error("bad arguments to GUIMemBag constructor")
-        end
-
-        -- todo: figure out inheritance wrapper benjamin mentioned in discord. fairly low priority
-        -- b/c inheriting static methods/vars is awkward boilerplate rn. and you have to define config methods in the middle of the constructor before you can finish assigning things.
-        function self.getConfig()
-            return TableUtils.copy(config)
-        end
-
-        ---@param newConfig GUIBagConfig
-        function self.setConfig(newConfig)
-            config = --[[---@type FullGUIBagConfig]] setmetatable(newConfig, configMeta)
         end
 
         -- now we finish the constructor
@@ -145,10 +96,11 @@ setmetatable(GUIBagInstance, TableUtils.merge(getmetatable(MemBagInstance), {
         ---@return GUIBagInstance_SavedState
         function self.save()
             return --[[---@type GUIBagInstance_SavedState]] TableUtils.merge(superSave(), {
-                config = next(--[[---@type table]] config) and config or nil, -- todo: ask why this errors without the cast. not allowed to call next() on shapes with fields?
                 pending = next(pending) and pending or nil,
             })
         end
+
+        local config = --[[---@type FullGUIBagConfig]] self.getConfig()
 
         -- not used except as callback
         ---@param guid string
@@ -278,5 +230,21 @@ setmetatable(GUIBagInstance, TableUtils.merge(getmetatable(MemBagInstance), {
     __index = MemBagInstance,
     -- other metamethods (e.g. arithmetic, pairs, etc) go here too.
 }))
+
+GUIBagInstance:setReferenceConfig({
+    gui = true,
+    blinkColor = "Red",
+    containerBlinkColor = "Pink",
+    selfHighlightColor = "Blue",
+    blinkDuration = 0.5,
+    labelConfig = {
+        color = "Blue",
+        label = "",
+        font_color = "Black",
+        position = {1,0},
+        align = {1,0},
+        scale = 2,
+    },
+})
 
 return GUIBagInstance

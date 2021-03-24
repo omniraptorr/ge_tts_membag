@@ -37,31 +37,52 @@ local MemBagInstance = {}
 
 MemBagInstance.INSTANCE_TYPE = "Absolute MemBag"
 
-function MemBagInstance.getDefaultConfig()
-    return MemBagInstance.defaultConfig
+MemBagInstance.referenceConfig = {
+    smoothTake = true
+}
+
+function MemBagInstance:setReferenceConfig(config)
+    self.referenceConfig = setmetatable(config, {__index = getmetatable(self).__index.referenceConfig})
 end
 
-local configMeta = {__index = MemBagInstance.getDefaultConfig()}
-
----@generic C : FullMemBagConfig
----@param config C
-function MemBagInstance:setDefaultConfig(config)
-    print("hi")
-    self.defaultConfig = setmetatable(config, getmetatable(self).__index.defaultConfig)
+---@param config table -- doing type checking at runtime until benjamin implements multiple for luanalysis
+function MemBagInstance:setGlobalConfig(config)
+    -- for k,v in pairs(self.referenceConfig) do
+    --     local referenceType, providedType = type(v), type(config[k])
+    --     Logger.assert(type(config[k]) == type(v), "all members in config must be provided, but param " .. k .. "was instead type " .. type(config[k]) .. ", should have been " .. type(v))
+    -- end
+    print("setting global config for " .. self.INSTANCE_TYPE)
+    self.globalConfig = setmetatable(config, getmetatable(self).__index.globalConfig or {}) -- nor sure if the copy is necessary here
 end
 
+function MemBagInstance:getGlobalConfig()
+    -- Logger.assert(self.globalConfig, "default config is nil!")
+    if not self.globalConfig then
+        self.globalConfig = setmetatable({}, self.referenceConfig)
+    end
+    return self.globalConfig
+end
 
 setmetatable(MemBagInstance, TableUtils.merge(getmetatable(LabelInstance), {
     ---@param objOrSavedState tts__Container | MemBagInstance_SavedState
     ---@param nilOrBagData nil | MemBagData
-    __call = function(_, objOrSavedState, nilOrBagData)
+    __call = function(classTable, objOrSavedState, nilOrBagData)
 
         local self = --[[---@type MemBagInstance]] LabelInstance(objOrSavedState)
 
         ---@type MemBagEntries
         local entries = {}
-        ---@type MemBagConfig
-        local config = setmetatable({}, MemBagInstance.getDefaultConfig())
+        ---@type MemBagConfig -- this (and its getter/setter) needs to be redefined in all children.
+        local config = setmetatable({}, classTable:getGlobalConfig())
+
+        function self.getConfig()
+            return config
+        end
+
+        ---@param newConfig MemBagConfig
+        function self.setConfig(newConfig)
+            config = setmetatable(newConfig, classTable:getGlobalConfig())
+        end
 
         ---@type MemBagData
         local bagData
@@ -69,16 +90,6 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(LabelInstance), {
             bagData = (--[[---@type MemBagInstance_SavedState]] objOrSavedState)
         elseif type(nilOrBagData) == "table" then
             bagData = --[[---@not nil]] TableUtils.copy(nilOrBagData)
-        end
-
-        function self.getConfig()
-            return config
-        end
-
-        -- this needs to be overridden for each descendant that adds config fields since they all need new defaults.
-        ---@param newConfig MemBagConfig
-        function self.setConfig(newConfig)
-            config = setmetatable(TableUtils.copy(newConfig), MemBagInstance.getDefaultConfig())
         end
 
         if bagData then
@@ -99,7 +110,7 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(LabelInstance), {
         function self.save()
             return --[[---@type MemBagInstance_SavedState]] TableUtils.merge(superSave(), {
                 entries = entries,
-                config = config
+                config = config,
             })
         end
 
@@ -308,10 +319,5 @@ setmetatable(MemBagInstance, TableUtils.merge(getmetatable(LabelInstance), {
     end,
     __index = LabelInstance,
 }))
-
-
-MemBagInstance:setDefaultConfig({
-    smoothTake = true,
-})
 
 return MemBagInstance
